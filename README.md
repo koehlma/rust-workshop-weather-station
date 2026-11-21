@@ -2,10 +2,8 @@
 
 Firmware for two devices built on the Raspberry Pi Pico W (RP2040). It is written in Rust with [Embassy](https://embassy.dev) and runs without an operating system or an allocator.
 
-| Crate                         | Device                                                                                             |
-| ----------------------------- | -------------------------------------------------------------------------------------------------- |
-| `crates/apps/weather-station` | Weather station that measures temperature, humidity, UV radiation, and air pressure and shows them |
-| `crates/apps/touch-display`   | Waveshare Pico-ResTouch-LCD-2.8 that stores the measurements on a microSD card and plots them      |
+- **Weather station**, in `crates/apps/weather-station`, measures the temperature, the humidity, the UV radiation, and the air pressure and shows them on its display.
+- **Touch display**, in `crates/apps/touch-display`, is a Waveshare Pico-ResTouch-LCD-2.8 that stores the measurements on a microSD card, plots them, and animates the weather.
 
 Both devices connect to Nexigon Hub, each with its own identity. Every 30 seconds, the weather station measures and sends the measurement directly to the touch display over the local network. Every 30 seconds, a device publishes a heartbeat event, the weather station its latest measurement, and the touch display the number of stored measurements. Device properties in Nexigon Hub configure the IP addresses of the devices. The devices run commands that Nexigon Hub sends and install updates that Nexigon Hub rolls out. A bootloader swaps in updates and rolls back those that fail. The weather station can also be built without Nexigon, in which case it logs its measurements to the USB serial port.
 
@@ -120,10 +118,8 @@ The display of the explorer board shows the latest temperature, humidity, UV ind
 
 With Nexigon, the weather station publishes two events every 30 seconds:
 
-| Category      | Body                                                                                     |
-| ------------- | ---------------------------------------------------------------------------------------- |
-| `heartbeat`   | `{"uptimeSeconds": 42, "firmwareVersion": "20261120-163751", "ipAddress": "10.10.2.51"}` |
-| `environment` | Latest measurement of the sensors                                                        |
+- `heartbeat` with the uptime, the version of the firmware, and the IP address of the device, for instance, `{"uptimeSeconds": 42, "firmwareVersion": "20261120-163751", "ipAddress": "10.10.2.51"}`.
+- `environment` with the latest measurement of the sensors.
 
 Both devices publish the same heartbeat. Its `ipAddress` is the address of the device in the Wi-Fi network.
 
@@ -139,13 +135,13 @@ The body of an `environment` event looks as follows:
 }
 ```
 
-| Field                  | Sensor | Value                           |
-| ---------------------- | ------ | ------------------------------- |
-| `temperatureCelsius`   | DHT11  | Temperature in degrees Celsius  |
-| `humidityPercent`      | DHT11  | Relative humidity in percent    |
-| `uvIndex`              | UV     | Approximate UV index            |
-| `uvVolts`              | UV     | Output voltage of the UV sensor |
-| `pressureHectopascals` | BMP280 | Air pressure in hectopascals    |
+Each field comes from one sensor:
+
+- `temperatureCelsius`: Temperature in degrees Celsius, from the DHT11.
+- `humidityPercent`: Relative humidity in percent, from the DHT11.
+- `uvIndex`: Approximate UV index, from the UV sensor.
+- `uvVolts`: Output voltage of the UV sensor.
+- `pressureHectopascals`: Air pressure in hectopascals, from the BMP280.
 
 `uvIndex` is `uvVolts` divided by 0.1 V. This approximation suits sensors with the GUVA-S12SD photodiode but is not calibrated. The BMP280 also measures the temperature, which the device does not publish because the DHT11 already does. The pressure is the absolute pressure at the height of the device, which is lower than the pressure at sea level that weather reports quote.
 
@@ -157,10 +153,8 @@ The touch display receives the measurements of the weather station, stores them 
 
 Two device properties configure the IP addresses. Each device reads its property before every heartbeat, so a change takes effect within 30 seconds:
 
-| Device          | Property                 | Value                              |
-| --------------- | ------------------------ | ---------------------------------- |
-| Weather station | `weather-station.config` | `{"displayAddress": "10.10.2.28"}` |
-| Touch display   | `touch-display.config`   | `{"sensorAddress": "10.10.2.51"}`  |
+- The weather station reads `weather-station.config`, for instance, `{"displayAddress": "10.10.2.28"}`.
+- The touch display reads `touch-display.config`, for instance, `{"sensorAddress": "10.10.2.51"}`.
 
 `displayAddress` is the address to which the weather station sends its measurements. `sensorAddress` is the only address from which the touch display accepts measurements. The heartbeats of the devices report their addresses. Set the properties in Nexigon Hub, for instance, with the Nexigon CLI:
 
@@ -182,15 +176,15 @@ The screen has four parts, from top to bottom:
 
 The display rotates through five pages: the plots of temperature, humidity, UV index, and air pressure for 10 seconds each, and then the [weather scene](#weather-scene) for 20 seconds. The plots cover the last 24 hours after a start. A tap on a tile plots its quantity, a tap on the plot shows the next page, and a tap on a chip selects its interval. A tap on the weather scene returns to the plots. After a tap, the page stays for a minute.
 
-| State                           | Dot   | Meaning                                                               |
-| ------------------------------- | ----- | --------------------------------------------------------------------- |
-| Recording · updated 12 s ago    | Green | Measurements arrive and are stored                                    |
-| Waiting for the weather station | Amber | No measurement has arrived since the start                            |
-| No data for 3 min               | Amber | The weather station has not sent a measurement for a while            |
-| Ignoring data from 10.10.2.99   | Amber | Measurements arrive from another address than `sensorAddress`         |
-| No weather station configured   | Amber | `touch-display.config` has no `sensorAddress`                         |
-| SD card failed, check the card  | Red   | The card is missing or cannot be written                              |
-| Reading 24 h from the SD card   | Gray  | The touch display reads the measurements of a newly selected interval |
+The dot in the bottom left corner shows the state of the device:
+
+- **Recording · updated 12 s ago**, green: Measurements arrive and are stored.
+- **Waiting for the weather station**, amber: No measurement has arrived since the start.
+- **No data for 3 min**, amber: The weather station has not sent a measurement for a while.
+- **Ignoring data from 10.10.2.99**, amber: Measurements arrive from another address than `sensorAddress`.
+- **No weather station configured**, amber: `touch-display.config` has no `sensorAddress`.
+- **SD card failed, check the card**, red: The card is missing or cannot be written.
+- **Reading 24 h from the SD card**, gray: The touch display reads the measurements of a newly selected interval.
 
 Each of the 288 columns of the plot summarizes the measurements of a bucket of the interval, for instance, 5 minutes of the last 24 hours. A band spans from their minimum to their maximum over an area that fades towards the bottom, and a line connects their means. Gaps of up to 2 minutes are interpolated, so that the plots of 1 and 3 hours stay continuous although their columns are shorter than the 30 seconds between two measurements. Longer gaps stay empty.
 
@@ -202,12 +196,10 @@ The display draws each frame in strips of 24 rows in memory and sends each strip
 
 The weather scene animates the latest measurement as a landscape of rolling hills under a sky. The weather station measures neither clouds nor rain, so the scene maps what it measures to a picture:
 
-| Element       | Shows                                                                                                                              |
-| ------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
-| Sun           | A UV index of at least 1, with a brighter glow and a bluer sky the higher the UV index                                             |
-| Clouds        | The humidity: more clouds the higher it is, and dark clouds from 85 %                                                              |
-| Rain or snow  | A humidity of at least 90 % while the air pressure falls, the classic barometric sign of worsening weather. Snow at or below 1 °C. |
-| Sky and hills | The temperature: an icy sky and snowy hills at or below 0 °C, and a warm sky from 25 °C                                            |
+- The sun shines with a UV index of at least 1. The higher the UV index, the brighter its glow and the bluer the sky.
+- Clouds grow with the humidity. From 85 %, they are dark.
+- Rain falls when the humidity is at least 90 % and the air pressure falls, the classic barometric sign of worsening weather. At or below 1 °C, snow falls instead.
+- The sky is icy and the hills are snowy at or below 0 °C. From 25 °C, the sky is warm.
 
 The headline shows the temperature and a description, for instance, "Mild, humid" or "Rain likely". The bar below shows the humidity, the UV index, and the air pressure with its trend: rising or falling by at least 1 hPa over the last two to three hours, or steady. The trend appears once the touch display has two hours of measurements, which it reads from the card after a start.
 
@@ -243,42 +235,32 @@ With every heartbeat, the touch display publishes a `storage` event with counts 
 }
 ```
 
-| Field                  | Count                                                                                     |
-| ---------------------- | ----------------------------------------------------------------------------------------- |
-| `storedMeasurements`   | Measurements written to the card                                                          |
-| `bufferedMeasurements` | Measurements in memory that are not on the card yet                                       |
-| `droppedMeasurements`  | Measurements that could not be stored                                                     |
-| `rejectedDatagrams`    | Datagrams from another address, with a repeated sequence number, or without a measurement |
-| `lostDatagrams`        | Datagrams that never arrived, according to the gaps in the sequence numbers               |
+Each field counts measurements or datagrams:
+
+- `storedMeasurements`: Measurements written to the card.
+- `bufferedMeasurements`: Measurements in memory that are not on the card yet.
+- `droppedMeasurements`: Measurements that could not be stored.
+- `rejectedDatagrams`: Datagrams from another address, with a repeated sequence number, or without a measurement.
+- `lostDatagrams`: Datagrams that never arrived, according to the gaps in the sequence numbers.
 
 ### Pins
 
 The display runs in landscape, as in the example code of Waveshare, with its colors in BGR order and inverted, as in Waveshare's configuration of `TFT_eSPI` for the board. The XPT2046 touch controller signals touches on its interrupt line, and the firmware then measures their position. It uses the calibration of Waveshare's example code for this orientation. Calibrations vary between panels, so the targets on the screen are large and the log records the position and target of every tap.
 
-| Signal                  | GPIO |
-| ----------------------- | ---- |
-| Display data or command | GP8  |
-| Display chip select     | GP9  |
-| SPI1 clock              | GP10 |
-| SPI1 data out           | GP11 |
-| SPI1 data in            | GP12 |
-| Display backlight       | GP13 |
-| Display reset           | GP15 |
-| Touch chip select       | GP16 |
-| Touch interrupt         | GP17 |
-| microSD chip select     | GP22 |
+The board connects its parts to these pins:
+
+- SPI1, which the display, the touch controller, and the microSD slot share: clock on GP10, data out on GP11, and data in on GP12.
+- Display: data or command on GP8, chip select on GP9, backlight on GP13, and reset on GP15.
+- Touch controller: chip select on GP16 and interrupt on GP17.
+- microSD slot: chip select on GP22.
 
 ## Commands
 
 With Nexigon, both devices offer three commands, which Nexigon Hub lists on the page of the device:
 
-| Command             | Input          | Output                               |
-| ------------------- | -------------- | ------------------------------------ |
-| `set-led`           | `{"on": true}` | None                                 |
-| `get-status`        | None           | `{"uptimeSeconds": 42, "led": true}` |
-| `nexigon.ota.check` | None           | None                                 |
-
-`set-led` turns the LED of the Pico W on or off. `get-status` reports how long the device has been running and whether the LED is on. `nexigon.ota.check` checks for an update right away.
+- `set-led` turns the LED of the Pico W on or off. Its input is, for instance, `{"on": true}`.
+- `get-status` reports how long the device has been running and whether the LED is on, for instance, `{"uptimeSeconds": 42, "led": true}`.
+- `nexigon.ota.check` checks for an update right away.
 
 To add a command, describe it in `publish_manifest` and handle it in `execute`, both in `crates/libs/pico-platform/src/nexigon/commands.rs`. The device runs one command at a time, between its other work, so a command must finish quickly. Nexigon Hub stops waiting for a pong after 15 seconds.
 
@@ -312,44 +294,42 @@ update completed
 
 The repository is a Cargo workspace. All firmware crates share the bootloader, the flash layout in `firmware.x`, and the platform code in `pico-platform`:
 
-| Crate                         | Purpose                                                                     |
-| ----------------------------- | --------------------------------------------------------------------------- |
-| `crates/apps/bootloader`      | Bootloader that swaps in updates and rolls them back                        |
-| `crates/apps/weather-station` | Firmware of the weather station                                             |
-| `crates/apps/touch-display`   | Firmware of the touch display                                               |
-| `crates/libs/pico-platform`   | Watchdog, USB logger, and, with the `nexigon` feature, Nexigon Hub          |
-| `crates/libs/pico-build`      | Helpers for the build scripts of the firmware crates, which run on the host |
+- `crates/apps/bootloader`: Bootloader that swaps in updates and rolls them back.
+- `crates/apps/weather-station`: Firmware of the weather station.
+- `crates/apps/touch-display`: Firmware of the touch display.
+- `crates/libs/pico-platform`: Watchdog, USB logger, and, with the `nexigon` feature, Nexigon Hub.
+- `crates/libs/pico-build`: Helpers for the build scripts of the firmware crates, which run on the host.
 
 Everything that concerns Nexigon is in `crates/libs/pico-platform/src/nexigon/`, which only the `nexigon` feature of `pico-platform` compiles, together with its dependencies. Its entry point `nexigon::run` takes the configuration of the device, the peripherals that the connection needs, and an `Application`. The application starts its own tasks once the device has joined the Wi-Fi network, with up to two sockets of the network stack at a time, receives the value of its configuration property, and provides the event that the device publishes with every heartbeat. A firmware creates its configuration with `pico_platform::nexigon_config!()`, which embeds what `pico_build::embed_nexigon_config` checks and the identity in `identity/` of the crate.
 
 The weather station enables the `nexigon` feature through its own feature of the same name. Without it, `src/standalone.rs` logs the measurements instead. Both variants use the same bootloader and flash layout, so a device can switch between them when flashed over USB.
 
-| File in `crates/apps/weather-station/src/` | Purpose                                                                        |
-| ------------------------------------------ | ------------------------------------------------------------------------------ |
-| `main.rs`                                  | Start of the firmware, which hands the station to a variant                    |
-| `station.rs`                               | Station, which measures and shows the measurements                             |
-| `sensors.rs`                               | Measurements of all sensors                                                    |
-| `dht11.rs`                                 | Readings of the DHT11 sensor                                                   |
-| `uv.rs`                                    | Readings of the UV sensor                                                      |
-| `bmp280.rs`                                | Readings of the BMP280 sensor                                                  |
-| `display.rs`                               | Display of the measurements on the TFT                                         |
-| `nexigon.rs`                               | Measurements for Nexigon Hub and the touch display, with the `nexigon` feature |
-| `standalone.rs`                            | Logging of measurements without Nexigon                                        |
+The firmware of the weather station consists of these files in `crates/apps/weather-station/src/`:
 
-| File in `crates/apps/touch-display/src/` | Purpose                                                                            |
-| ---------------------------------------- | ---------------------------------------------------------------------------------- |
-| `main.rs`                                | Start of the firmware, configuration, and storage events                           |
-| `receiver.rs`                            | Reception of measurements, which it stores and shows, and the interval of the plot |
-| `storage.rs`                             | Files on the microSD card and writing of blocks                                    |
-| `format.rs`                              | Binary format of the files                                                         |
-| `display.rs`                             | Display                                                                            |
-| `strip.rs`                               | Strips of the screen in memory                                                     |
-| `style.rs`                               | Colors and text of the screens                                                     |
-| `scene.rs`                               | Animated weather scene                                                             |
-| `weather.rs`                             | Weather of the scene and trend of the air pressure                                 |
-| `screen.rs`                              | Layout of the screen and the plot                                                  |
-| `history.rs`                             | Summaries of the measurements of an interval for the plot                          |
-| `touch.rs`                               | Positions of taps on the touch screen                                              |
+- `main.rs`: Start of the firmware, which hands the station to a variant.
+- `station.rs`: Station, which measures and shows the measurements.
+- `sensors.rs`: Measurements of all sensors.
+- `dht11.rs`: Readings of the DHT11 sensor.
+- `uv.rs`: Readings of the UV sensor.
+- `bmp280.rs`: Readings of the BMP280 sensor.
+- `display.rs`: Display of the measurements on the TFT.
+- `nexigon.rs`: Measurements for Nexigon Hub and the touch display, with the `nexigon` feature.
+- `standalone.rs`: Logging of measurements without Nexigon.
+
+The firmware of the touch display consists of these files in `crates/apps/touch-display/src/`:
+
+- `main.rs`: Start of the firmware, configuration, and storage events.
+- `receiver.rs`: Reception of measurements, which it stores and shows, and the interval of the plot.
+- `storage.rs`: Files on the microSD card and writing of blocks.
+- `format.rs`: Binary format of the files.
+- `display.rs`: Display, which paints frames strip by strip.
+- `strip.rs`: Strips of the screen in memory.
+- `style.rs`: Colors and text of the screens.
+- `scene.rs`: Animated weather scene.
+- `weather.rs`: Weather of the scene and trend of the air pressure.
+- `screen.rs`: Layout of the screen and the plot.
+- `history.rs`: Summaries of the measurements of an interval for the plot.
+- `touch.rs`: Positions of taps on the touch screen.
 
 ### Connection to Nexigon Hub
 
@@ -369,32 +349,30 @@ All of this runs on one task, which owns the connection. While the device waits 
 
 The flash holds the bootloader, the state of the bootloader, and two slots for the firmware. `firmware.x` describes the layout:
 
-| Region           | Size     | Content                                           |
-| ---------------- | -------- | ------------------------------------------------- |
-| Bootloader       | 24 KiB   | `crates/apps/bootloader`, based on `embassy-boot` |
-| Bootloader state | 4 KiB    | Pending update and progress of swapping it in     |
-| Active slot      | 1008 KiB | Running firmware                                  |
-| DFU slot         | 1012 KiB | Downloaded update                                 |
+- Bootloader, 24 KiB: `crates/apps/bootloader`, based on `embassy-boot`.
+- Bootloader state, 4 KiB: Pending update and progress of swapping it in.
+- Active slot, 1008 KiB: Running firmware.
+- DFU slot, 1012 KiB: Downloaded update.
 
 The firmware follows the OTA update contract of Nexigon Hub, which Nexigon Agent also implements. A check reads the desired state from the `dev.nexigon.ota.config` property. It resolves the version path of the configuration and the version of the running firmware, the tag `FIRMWARE_VERSION`, in the same package. If they differ, the firmware downloads the asset and its signature from the object storage of Nexigon Hub over a second TLS connection. It writes the asset to the DFU slot, verifies its signature with the release key, marks it for the bootloader, and resets. The bootloader swaps the slots and starts the new firmware, which commits itself once it reaches Nexigon Hub. If the new firmware does not commit itself within 5 minutes, the watchdog resets the device, and the bootloader swaps the old firmware back. A power failure during a swap resumes it. The firmware reports each step in the `dev.nexigon.ota.status` property.
 
 The types of the actions, command invocations, properties, and results in `generated/nexigon_api.rs` are generated from the API definitions of Nexigon Hub with Sidex's `rust-embedded` backend. They read messages without copying them and borrow from the receive buffers.
 
-| File in `crates/libs/pico-platform/src/nexigon/` | Purpose                                                     |
-| ------------------------------------------------ | ----------------------------------------------------------- |
-| `mod.rs`                                         | Entry point, applications, and the session with Nexigon Hub |
-| `config.rs`                                      | Configuration and identity of a device                      |
-| `network.rs`                                     | Wi-Fi and the network stack                                 |
-| `events.rs`                                      | Heartbeat events and the events of applications             |
-| `commands.rs`                                    | Commands of the device                                      |
-| `ota.rs`                                         | Update checks following the OTA update contract             |
-| `firmware.rs`                                    | Firmware slots, signature verification, and commit deadline |
-| `download.rs`                                    | Downloads over HTTPS                                        |
-| `hub.rs`                                         | Session with Nexigon Hub: actions, commands, and pings      |
-| `multiplex.rs`                                   | Frames of the multiplex protocol                            |
-| `websocket.rs`                                   | WebSocket client                                            |
-| `tls.rs`                                         | TLS connections and client authentication                   |
-| `clock.rs`                                       | Clock synchronization with SNTP                             |
+The connection to Nexigon Hub consists of these files in `crates/libs/pico-platform/src/nexigon/`:
+
+- `mod.rs`: Entry point, applications, and the session with Nexigon Hub.
+- `config.rs`: Configuration and identity of a device.
+- `network.rs`: Wi-Fi and the network stack.
+- `events.rs`: Heartbeat events and the events of applications.
+- `commands.rs`: Commands of the device.
+- `ota.rs`: Update checks following the OTA update contract.
+- `firmware.rs`: Firmware slots, signature verification, and commit deadline.
+- `download.rs`: Downloads over HTTPS.
+- `hub.rs`: Session with Nexigon Hub: actions, commands, and pings.
+- `multiplex.rs`: Frames of the multiplex protocol.
+- `websocket.rs`: WebSocket client.
+- `tls.rs`: TLS connections and client authentication.
+- `clock.rs`: Clock synchronization with SNTP.
 
 ## Limitations
 
