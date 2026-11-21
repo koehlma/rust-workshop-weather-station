@@ -1,0 +1,55 @@
+[package]
+name = "pico-platform"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[features]
+# Connection to Nexigon Hub: events, commands, and updates. See `src/nexigon/`.
+nexigon = [
+    "dep:cyw43",
+    "dep:cyw43-pio",
+    "dep:embassy-boot",
+    "dep:embassy-boot-rp",
+    "dep:embassy-embedded-hal",
+    "dep:embassy-futures",
+    "dep:embassy-net",
+    "dep:embassy-sync",
+    "dep:embedded-io-async",
+    "dep:embedded-tls",
+    "dep:heapless",
+    "dep:p256",
+    "dep:portable-atomic",
+    "dep:sha2",
+    "dep:sidex-embedded",
+    "dep:signature",
+    "dep:static_cell",
+]
+
+[dependencies]
+cortex-m.workspace = true
+embassy-executor.workspace = true
+embassy-rp.workspace = true
+embassy-time.workspace = true
+embassy-usb-logger.workspace = true
+log.workspace = true
+
+# Dependencies of the `nexigon` feature.
+cyw43 = { workspace = true, optional = true }
+cyw43-pio = { workspace = true, optional = true }
+embassy-boot = { workspace = true, optional = true }
+embassy-boot-rp = { workspace = true, optional = true }
+embassy-embedded-hal = { workspace = true, optional = true }
+embassy-futures = { workspace = true, optional = true }
+embassy-net = { workspace = true, optional = true }
+embassy-sync = { workspace = true, optional = true }
+embedded-io-async = { workspace = true, optional = true }
+embedded-tls = { workspace = true, optional = true }
+heapless = { workspace = true, optional = true }
+p256 = { workspace = true, optional = true }
+portable-atomic = { workspace = true, optional = true }
+sha2 = { workspace = true, optional = true }
+sidex-embedded = { workspace = true, optional = true }
+signature = { workspace = true, optional = true }
+static_cell = { workspace = true, optional = true }

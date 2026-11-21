@@ -32,7 +32,7 @@ use super::api::devices::DeviceCommandHubFrame;
 use super::api::devices::DeviceCommandInvokeData;
 use super::api::errors::ActionErrorKind;
 use super::api::errors::ActionResult;
-use super::config;
+use super::config::Config;
 use super::multiplex;
 use super::multiplex::DATA_HEADER_SIZE;
 use super::multiplex::Frame;
@@ -142,17 +142,23 @@ pub struct Session<'a, S> {
 impl<'a, S: Read + Write + WaitReadable> Session<'a, S> {
     /// Opens a session over `stream`.
     ///
-    /// `seed` initializes the generator of WebSocket masking keys.
-    pub async fn open(stream: S, buffers: &'a mut Buffers, seed: u32) -> Result<Self, Error> {
+    /// `seed` initializes the generator of WebSocket masking keys, and
+    /// `config` provides the credentials of the device.
+    pub async fn open(
+        stream: S,
+        buffers: &'a mut Buffers,
+        seed: u32,
+        config: &'static Config,
+    ) -> Result<Self, Error> {
         let headers = [
-            ("Authorization", config::AUTHORIZATION),
-            ("X-Device-Fingerprint", config::FINGERPRINT),
+            ("Authorization", config.authorization),
+            ("X-Device-Fingerprint", config.fingerprint),
             // Nexigon Hub routes commands only to registered connections.
             ("X-Register-Connection", "true"),
         ];
         let ws = WebSocket::connect(
             stream,
-            config::HUB_HOST,
+            config.hub_host,
             "/api/v1/connect/ws",
             &headers,
             &mut buffers.rx,

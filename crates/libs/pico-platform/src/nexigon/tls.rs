@@ -30,7 +30,7 @@ use p256::ecdsa::DerSignature;
 use p256::ecdsa::SigningKey;
 use signature::SignerMut;
 
-use super::config;
+use super::config::Config;
 use super::hub;
 
 /// Cipher suite of connections, which every TLS 1.3 server supports.
@@ -96,6 +96,7 @@ pub async fn connect<'a>(
     stack: Stack<'a>,
     buffers: &'a mut Buffers,
     host: &str,
+    config: &'static Config,
 ) -> Result<Connection<'a>, ConnectError> {
     let address = *stack
         .dns_query(host, DnsQueryType::A)
@@ -111,7 +112,7 @@ pub async fn connect<'a>(
         .map_err(|_| ConnectError::Tcp)?;
     let mut tls = TlsConnection::new(socket, &mut buffers.tls_rx, &mut buffers.tls_tx);
     let tls_config = TlsConfig::new().with_server_name(host);
-    tls.open(TlsContext::new(&tls_config, Provider::new()))
+    tls.open(TlsContext::new(&tls_config, Provider::new(config)))
         .await
         .map_err(ConnectError::Tls)?;
     Ok(tls)
@@ -122,14 +123,17 @@ pub async fn connect<'a>(
 /// Without a verifier, `embedded-tls` accepts any certificate of the server.
 struct Provider {
     rng: RoscRng,
+    /// Configuration with the identity of the device.
+    config: &'static Config,
 }
 
 impl Provider {
-    fn new() -> Self {
+    fn new(config: &'static Config) -> Self {
         Self {
             // The RP2040 has no true random number generator. The ring
             // oscillator is the best available source of entropy.
             rng: RoscRng,
+            config,
         }
     }
 }
@@ -143,7 +147,7 @@ impl CryptoProvider for Provider {
     }
 
     fn signer(&mut self) -> Result<(impl SignerMut<DerSignature>, SignatureScheme), TlsError> {
-        let key = SecretKey::from_sec1_der(config::DEVICE_KEY)
+        let key = SecretKey::from_sec1_der(self.config.device_key)
             .map_err(|_| TlsError::InvalidPrivateKey)?;
         Ok((
             TimedSigner(SigningKey::from(&key)),
@@ -152,7 +156,7 @@ impl CryptoProvider for Provider {
     }
 
     fn client_cert(&mut self) -> Option<Certificate<impl AsRef<[u8]>>> {
-        Some(Certificate::X509(config::DEVICE_CERT))
+        Some(Certificate::X509(self.config.device_cert))
     }
 }
 

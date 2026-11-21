@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# Publishes the firmware built by `scripts/build.sh` as a new version of a
-# package in Nexigon Hub. The version gets the assets `firmware.bin` and
-# `firmware.bin.sig`, the locked tag of the firmware version, and the tag
-# `latest`, which moves to it.
+# Publishes the firmware of a crate built by `scripts/build.sh` as a new
+# version of a package in Nexigon Hub. The version gets the assets
+# `firmware.bin` and `firmware.bin.sig`, the locked tag of the firmware
+# version, and the tag `latest`, which moves to it.
 #
-# Usage: release.sh REPOSITORY/PACKAGE
+# Usage: release.sh CRATE REPOSITORY/PACKAGE
 #
 # Requires `nexigon-cli` (or `NEXIGON_CLI`) and an organization API token in
 # `NEXIGON_ORG_TOKEN`.
@@ -13,13 +13,14 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-if [ $# -ne 1 ] || [[ "$1" != */* ]]; then
-    echo "usage: $0 REPOSITORY/PACKAGE" >&2
+if [ $# -ne 2 ] || [[ "$2" != */* ]]; then
+    echo "usage: $0 CRATE REPOSITORY/PACKAGE, for instance, $0 weather-station default/rp-test" >&2
     exit 1
 fi
-package="$1"
+out="target/$1"
+package="$2"
 repository="${package%%/*}"
-version="$(cat target/firmware.version)"
+version="$(cat "$out/firmware.version")"
 cli="${NEXIGON_CLI:-nexigon-cli}"
 
 config="$(mktemp)"
@@ -36,8 +37,8 @@ field() {
     python3 -c 'import json, sys; print(json.load(sys.stdin)[sys.argv[1]])' "$1"
 }
 
-image="$(nexigon repositories assets upload "$repository" target/firmware.bin | field assetId)"
-signature="$(nexigon repositories assets upload "$repository" target/firmware.bin.sig | field assetId)"
+image="$(nexigon repositories assets upload "$repository" "$out/firmware.bin" | field assetId)"
+signature="$(nexigon repositories assets upload "$repository" "$out/firmware.bin.sig" | field assetId)"
 version_id="$(
     nexigon repositories versions create "$package" \
         --tag "$version,locked" \

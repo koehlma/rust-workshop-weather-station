@@ -33,8 +33,6 @@ use sha2::Sha256;
 use signature::hazmat::PrehashVerifier;
 use static_cell::StaticCell;
 
-use super::config;
-
 /// Size of the flash of the Raspberry Pi Pico W.
 const FLASH_SIZE: usize = 2 * 1024 * 1024;
 
@@ -79,11 +77,16 @@ impl From<embassy_boot::FirmwareUpdaterError> for Error {
 pub struct Firmware {
     updater: BlockingFirmwareUpdater<'static, Partition, Partition>,
     state: State,
+    /// Public key with which updates must be signed.
+    release_key: &'static [u8],
 }
 
 impl Firmware {
     /// Takes control of the flash and reads the state of the bootloader.
-    pub fn new(flash: Peri<'static, FLASH>) -> Self {
+    ///
+    /// Updates must be signed with the private key of `release_key`, an
+    /// uncompressed P-256 point.
+    pub fn new(flash: Peri<'static, FLASH>, release_key: &'static [u8]) -> Self {
         static FLASH: StaticCell<Mutex<NoopRawMutex, RefCell<FlashDriver>>> = StaticCell::new();
         static ALIGNED: StaticCell<[u8; 1]> = StaticCell::new();
         let flash = FLASH.init(Mutex::new(RefCell::new(Flash::new_blocking(flash))));
@@ -94,7 +97,11 @@ impl Firmware {
         if state == State::Boot {
             COMMITTED.store(true, Ordering::Relaxed);
         }
-        Self { updater, state }
+        Self {
+            updater,
+            state,
+            release_key,
+        }
     }
 
     /// Indicates whether the bootloader has just swapped in this firmware,
@@ -125,6 +132,7 @@ impl Firmware {
         }
         Ok(Update {
             updater: &mut self.updater,
+            release_key: self.release_key,
             len,
             written: 0,
         })
@@ -134,6 +142,7 @@ impl Firmware {
 /// Update being written to the DFU slot.
 pub struct Update<'f> {
     updater: &'f mut BlockingFirmwareUpdater<'static, Partition, Partition>,
+    release_key: &'static [u8],
     len: usize,
     written: usize,
 }
@@ -163,8 +172,7 @@ impl Update<'_> {
         let mut digest = [0; 32];
         self.updater
             .hash::<Sha256>(self.len as u32, &mut chunk, &mut digest)?;
-        let key =
-            VerifyingKey::from_sec1_bytes(config::RELEASE_KEY).map_err(|_| Error::Signature)?;
+        let key = VerifyingKey::from_sec1_bytes(self.release_key).map_err(|_| Error::Signature)?;
         let signature = DerSignature::from_bytes(signature).map_err(|_| Error::Signature)?;
         key.verify_prehash(&digest, &signature)
             .map_err(|_| Error::Signature)?;

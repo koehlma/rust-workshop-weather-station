@@ -1395,41 +1395,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "650eef8c711430f1a879fdd01d4745a7deea475becfb90269c06775983bbf086"
 
 [[package]]
-name = "nexigon-mcu-rp-example"
-version = "0.1.0"
-dependencies = [
- "bme280",
- "cortex-m",
- "cortex-m-rt",
- "cyw43",
- "cyw43-pio",
- "embassy-boot",
- "embassy-boot-rp",
- "embassy-embedded-hal",
- "embassy-executor",
- "embassy-futures",
- "embassy-net",
- "embassy-rp",
- "embassy-sync",
- "embassy-time",
- "embassy-usb-logger",
- "embedded-graphics",
- "embedded-hal-bus",
- "embedded-io-async 0.7.0",
- "embedded-tls",
- "heapless 0.8.0",
- "log",
- "mipidsi",
- "p256",
- "panic-reset",
- "portable-atomic",
- "sha2",
- "sidex-embedded",
- "signature",
- "static_cell",
-]
-
-[[package]]
 name = "nu-ansi-term"
 version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1554,6 +1519,39 @@ name = "pico-args"
 version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5be167a7af36ee22fe3115051bc51f6e6c7054c9348e28deb4f49bd6f705a315"
+
+[[package]]
+name = "pico-build"
+version = "0.1.0"
+
+[[package]]
+name = "pico-platform"
+version = "0.1.0"
+dependencies = [
+ "cortex-m",
+ "cyw43",
+ "cyw43-pio",
+ "embassy-boot",
+ "embassy-boot-rp",
+ "embassy-embedded-hal",
+ "embassy-executor",
+ "embassy-futures",
+ "embassy-net",
+ "embassy-rp",
+ "embassy-sync",
+ "embassy-time",
+ "embassy-usb-logger",
+ "embedded-io-async 0.7.0",
+ "embedded-tls",
+ "heapless 0.8.0",
+ "log",
+ "p256",
+ "portable-atomic",
+ "sha2",
+ "sidex-embedded",
+ "signature",
+ "static_cell",
+]
 
 [[package]]
 name = "pin-project-lite"
@@ -2114,6 +2112,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "touch-display"
+version = "0.1.0"
+dependencies = [
+ "cortex-m-rt",
+ "embassy-executor",
+ "embassy-rp",
+ "embassy-time",
+ "embedded-graphics",
+ "embedded-hal-bus",
+ "log",
+ "mipidsi",
+ "panic-reset",
+ "pico-build",
+ "pico-platform",
+ "portable-atomic",
+ "static_cell",
+]
+
+[[package]]
 name = "tracing"
 version = "0.1.44"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2299,6 +2316,28 @@ checksum = "29790946404f91d9c5d06f9874efddea1dc06c5efe94541a7d6863108e3a5e4b"
 dependencies = [
  "same-file",
  "winapi-util",
+]
+
+[[package]]
+name = "weather-station"
+version = "0.1.0"
+dependencies = [
+ "bme280",
+ "cortex-m",
+ "cortex-m-rt",
+ "embassy-executor",
+ "embassy-rp",
+ "embassy-time",
+ "embedded-graphics",
+ "embedded-hal-bus",
+ "heapless 0.8.0",
+ "log",
+ "mipidsi",
+ "panic-reset",
+ "pico-build",
+ "pico-platform",
+ "portable-atomic",
+ "static_cell",
 ]
 
 [[package]]

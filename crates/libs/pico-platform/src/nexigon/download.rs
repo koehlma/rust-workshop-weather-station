@@ -10,6 +10,7 @@ use embassy_net::Stack;
 use embedded_io_async::Read;
 use embedded_io_async::Write;
 
+use super::config::Config;
 use super::tls;
 
 /// Maximum size of the head of a response.
@@ -57,13 +58,14 @@ impl<'a> Download<'a> {
         stack: Stack<'a>,
         buffers: &'a mut tls::Buffers,
         url: &str,
+        config: &'static Config,
     ) -> Result<Self, Error> {
         let rest = url.strip_prefix("https://").ok_or(Error::InvalidUrl)?;
         let (host, path) = match rest.find('/') {
             Some(index) => rest.split_at(index),
             None => (rest, "/"),
         };
-        let mut connection = tls::connect(stack, buffers, host)
+        let mut connection = tls::connect(stack, buffers, host, config)
             .await
             .map_err(Error::Connect)?;
 

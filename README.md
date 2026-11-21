@@ -1,37 +1,40 @@
 # Weather Station on the Raspberry Pi Pico W
 
-Firmware for a weather station built from a Raspberry Pi Pico W (RP2040) on a Joy-IT explorer board, a SEN-UV01 UV sensor, and a BMP280 pressure sensor. Every 30 seconds, it measures the temperature, humidity, UV radiation, and air pressure and shows them on the display of the board. It is written in Rust with [Embassy](https://embassy.dev) and runs without an operating system or an allocator.
+Firmware for two devices built on the Raspberry Pi Pico W (RP2040). It is written in Rust with [Embassy](https://embassy.dev) and runs without an operating system or an allocator.
 
-The `nexigon` feature, which is enabled by default, connects the weather station to Nexigon Hub. Every 30 seconds, the device publishes a heartbeat event and the measurement of the sensors. It runs commands that Nexigon Hub sends and installs updates that Nexigon Hub rolls out. A bootloader swaps in updates and rolls back those that fail. Without the feature, the firmware logs the measurements to the USB serial port.
+| Crate                         | Device                                                                                             |
+| ----------------------------- | -------------------------------------------------------------------------------------------------- |
+| `crates/apps/weather-station` | Weather station that measures temperature, humidity, UV radiation, and air pressure and shows them |
+| `crates/apps/touch-display`   | Waveshare Pico-ResTouch-LCD-2.8 that shows a placeholder text                                      |
 
-With the feature, the firmware holds one persistent connection to Nexigon Hub, which authenticates the device with a deployment token, a device fingerprint, and a client certificate. On its first connection, Nexigon Hub registers the device in the project of the deployment token.
+Both devices connect to Nexigon Hub, each with its own identity. Every 30 seconds, a device publishes a heartbeat event, and the weather station also publishes its measurement. The devices run commands that Nexigon Hub sends and install updates that Nexigon Hub rolls out. A bootloader swaps in updates and rolls back those that fail. The weather station can also be built without Nexigon, in which case it logs its measurements to the USB serial port.
+
+Each device holds one persistent connection to Nexigon Hub, which authenticates it with a deployment token, a device fingerprint, and a client certificate. On its first connection, Nexigon Hub registers the device in the project of the deployment token.
 
 ## Requirements
 
-- A Raspberry Pi Pico W on a Joy-IT explorer board (RB-P-XPLR). The firmware uses its DHT11 sensor on GP0 and its 1.8" display, an ST7735 on SPI0. Turn on their switches on the board.
-- A Joy-IT SEN-UV01 UV sensor connected to GP26, the first analog input. Connect its VCC to 3V3 (OUT), GND to GND, and OUT to GP26. Power it from 3.3 V, the most that the analog inputs of the Pico W accept.
-- A BMP280 pressure sensor, for instance, the Joy-IT KY-052, connected to I2C0. Connect its +V to 3V3 (OUT), GND to GND, SDA to GP4, and SCL to GP5. Tie CSB to 3V3, which selects I2C, and SDO to 3V3, which selects the address 0x77.
+- A Raspberry Pi Pico W for each device. The Wi-Fi chip of the Pico W joins 2.4 GHz networks only.
 - [Rust](https://rustup.rs). `rust-toolchain.toml` selects the toolchain and installs the `thumbv6m-none-eabi` target and `llvm-objcopy`.
-- `python3`, which creates the UF2 file.
+- `python3`, which creates the UF2 files.
 - Optionally, [`mise`](https://mise.jdx.dev) to run the tasks in `mise.toml`.
 
 For Nexigon, you also need:
 
-- A 2.4 GHz Wi-Fi network. The Wi-Fi chip of the Pico W does not support 5 GHz.
+- A 2.4 GHz Wi-Fi network.
 - `openssl`, which creates keys and signs releases.
 - For releases, the [Nexigon CLI](https://docs.nexigon.dev) and an organization API token.
 
+The weather station needs:
+
+- A Joy-IT explorer board (RB-P-XPLR) for the Pico W. The firmware uses its DHT11 sensor on GP0 and its 1.8" display, an ST7735 on SPI0. Turn on their switches on the board.
+- A Joy-IT SEN-UV01 UV sensor connected to GP26, the first analog input. Connect its VCC to 3V3 (OUT), GND to GND, and OUT to GP26. Power it from 3.3 V, the most that the analog inputs of the Pico W accept.
+- A BMP280 pressure sensor, for instance, the Joy-IT KY-052, connected to I2C0. Connect its +V to 3V3 (OUT), GND to GND, SDA to GP4, and SCL to GP5. Tie CSB to 3V3, which selects I2C, and SDO to 3V3, which selects the address 0x77.
+
+The touch display needs a Waveshare Pico-ResTouch-LCD-2.8. Its display is an ST7789 with 320 × 240 pixels on SPI1, which it shares with its XPT2046 touch controller and its microSD slot. Plug in the Pico W with its USB port on the side of the microSD slot.
+
 ## Configure Nexigon
 
-Skip this section to build the firmware without Nexigon.
-
-Create the identity of the device:
-
-```sh
-mise run provision
-```
-
-This writes a P-256 key, a self-signed certificate for it, and a fingerprint to `identity/`. Every board needs its own identity. Keep it private: whoever has it can act as the device.
+Skip this section to build the weather station without Nexigon.
 
 Create the key with which releases are signed:
 
@@ -41,6 +44,14 @@ mise run create-release-key
 
 This writes a P-256 key pair to `keys/`. The firmware embeds the public key and installs only updates signed with the private key. All devices that receive the same updates need the same release key. Keep the private key private: whoever has it can install their own firmware.
 
+Create the identity of each device, for instance, of the weather station:
+
+```sh
+mise run provision weather-station
+```
+
+This writes a P-256 key, a self-signed certificate for it, and a fingerprint to `crates/apps/weather-station/identity/`. Every board needs its own identity. Keep it private: whoever has it can act as the device.
+
 Configure the firmware in `mise.local.toml`, which Git ignores:
 
 ```toml
@@ -49,43 +60,37 @@ NEXIGON_HUB_URL = "https://nexigon.example.com"
 NEXIGON_DEPLOYMENT_TOKEN = "deployment_..."
 WIFI_SSID = "..."
 WIFI_PASSWORD = "..."
-# Optional: version path from which the device installs updates.
-NEXIGON_UPDATE_PATH = "default/rp-test/latest"
+# Optional: version paths from which the devices install updates.
+WEATHER_STATION_UPDATE_PATH = "default/weather-station/latest"
+TOUCH_DISPLAY_UPDATE_PATH = "default/touch-display/latest"
 # Only needed for releases.
 NEXIGON_ORG_TOKEN = "org_sk_..."
 ```
 
-Without `mise`, set these environment variables before running the scripts in `scripts/`. The firmware embeds the configuration, the identity, and the public release key when it is built.
+Each crate has its own update path, named after the crate, so that a device only installs its own firmware. Without `mise`, set these environment variables before running the scripts in `scripts/`. A firmware embeds the configuration, its identity, and the public release key when it is built.
 
 ## Build and Flash the Firmware
 
-Build the bootloader and the firmware with Nexigon:
+Build the bootloader and the firmware of a crate:
 
 ```sh
-mise run build
+mise run build weather-station
+mise run build touch-display
 ```
 
-Or build them without Nexigon, which needs no configuration:
+Or build the weather station without Nexigon, which needs no configuration:
 
 ```sh
-mise run build -- --no-default-features
+mise run build weather-station -- --no-default-features
 ```
 
-The version of the firmware is the time of the build, for instance, `20261120-163751`. Set `FIRMWARE_VERSION` to choose another one.
+The build writes the UF2 file to `target/<crate>/<crate>.uf2`, for instance, `target/touch-display/touch-display.uf2`. The version of the firmware is the time of the build, for instance, `20261120-163751`. Set `FIRMWARE_VERSION` to choose another one.
 
-To flash the bootloader and the firmware, hold the BOOTSEL button while connecting the Pico W over USB. It appears as a drive named `RPI-RP2`. Copy `target/nexigon-mcu-rp-example.uf2` to the drive. The Pico W restarts with the new firmware. With Nexigon, the device afterward receives new versions through Nexigon Hub.
+The UF2 file contains the deployment token, the Wi-Fi password, and the private key of the device. Do not share it.
 
-The display shows the latest temperature, humidity, UV index, and air pressure, with dashes for a sensor that failed.
+To flash the bootloader and the firmware, hold the BOOTSEL button while connecting the Pico W over USB. It appears as a drive named `RPI-RP2`. Copy the UF2 file to the drive. The Pico W restarts with the new firmware. With Nexigon, the device afterward receives new versions through Nexigon Hub.
 
-The firmware logs to a USB serial port, for instance, `/dev/ttyACM0` on Linux or `/dev/cu.usbmodem*` on macOS. Open it with a serial terminal, for instance, `tio /dev/ttyACM0`. Without Nexigon, the log looks as follows:
-
-```text
-starting firmware 20261120-163751
-measured 21.0 °C, 45 % humidity, UV index 0.2 (0.021 V), 1013.2 hPa
-measured 21.1 °C, 45 % humidity, UV index 0.2 (0.022 V), 1013.2 hPa
-```
-
-With Nexigon, it looks as follows:
+The firmware logs to a USB serial port, for instance, `/dev/ttyACM0` on Linux or `/dev/cu.usbmodem*` on macOS. Open it with a serial terminal, for instance, `tio /dev/ttyACM0`. The log of the weather station with Nexigon looks as follows:
 
 ```text
 starting firmware 20261120-163751
@@ -97,14 +102,17 @@ signed handshake in ... ms
 connected in ... ms
 authenticated as device d_...
 published commands
-published heartbeat and 21.0 °C, 45 % humidity, UV index 0.2 (0.021 V), 1013.2 hPa
+measured 21.0 °C, 45 % humidity, UV index 0.2 (0.021 V), 1013.2 hPa
+published heartbeat and environment event
 ```
 
-The events appear in the event log of the device in Nexigon Hub.
+Without Nexigon, only the measurements follow the first line. The touch display logs `published heartbeat` instead of the measurements. The events appear in the event log of the device in Nexigon Hub.
 
-## Events
+## Weather Station
 
-With Nexigon, the device publishes two events every 30 seconds:
+The display of the explorer board shows the latest temperature, humidity, UV index, and air pressure, with dashes for a sensor that failed.
+
+With Nexigon, the weather station publishes two events every 30 seconds:
 
 | Category      | Body                                                          |
 | ------------- | ------------------------------------------------------------- |
@@ -131,13 +139,28 @@ The body of an `environment` event looks as follows:
 | `uvVolts`              | UV     | Output voltage of the UV sensor |
 | `pressureHectopascals` | BMP280 | Air pressure in hectopascals    |
 
-`uvIndex` is `uvVolts` divided by 0.1 V. This approximation suits sensors with the GUVA-S12SD photodiode but is not calibrated. The BMP280 also measures the temperature, which the device does not publish because the DHT11 already does.
+`uvIndex` is `uvVolts` divided by 0.1 V. This approximation suits sensors with the GUVA-S12SD photodiode but is not calibrated. The BMP280 also measures the temperature, which the device does not publish because the DHT11 already does. The pressure is the absolute pressure at the height of the device, which is lower than the pressure at sea level that weather reports quote.
 
-If a sensor fails, the device logs a warning and leaves out its fields. If all fail, it publishes only the heartbeat. The DHT11 and the BMP280 fail when they do not answer, for instance, because none is connected. A missing UV sensor goes unnoticed, because the open analog input yields arbitrary voltages. `src/sensors.rs` reads the sensors, and `src/nexigon/events.rs` publishes the events.
+If a sensor fails, the device logs a warning and leaves out its fields. If all fail, it publishes only the heartbeat. The DHT11 and the BMP280 fail when they do not answer, for instance, because none is connected. A missing UV sensor goes unnoticed, because the open analog input yields arbitrary voltages.
+
+## Touch Display
+
+The touch display shows "Hello from Nexigon!" and the version of its firmware. It publishes only the heartbeat. Its display runs in landscape, as in the example code of Waveshare. The firmware keeps the touch controller and the microSD slot deselected and does not use them yet.
+
+| Signal                   | GPIO |
+| ------------------------ | ---- |
+| Display data or command  | GP8  |
+| Display chip select      | GP9  |
+| SPI1 clock               | GP10 |
+| SPI1 data to the display | GP11 |
+| Display backlight        | GP13 |
+| Display reset            | GP15 |
+| Touch chip select        | GP16 |
+| microSD chip select      | GP22 |
 
 ## Commands
 
-With Nexigon, the device offers three commands, which Nexigon Hub lists on the page of the device:
+With Nexigon, both devices offer three commands, which Nexigon Hub lists on the page of the device:
 
 | Command             | Input          | Output                               |
 | ------------------- | -------------- | ------------------------------------ |
@@ -147,20 +170,20 @@ With Nexigon, the device offers three commands, which Nexigon Hub lists on the p
 
 `set-led` turns the LED of the Pico W on or off. `get-status` reports how long the device has been running and whether the LED is on. `nexigon.ota.check` checks for an update right away.
 
-To add a command, describe it in `publish_manifest` and handle it in `execute`, both in `src/nexigon/commands.rs`. The device runs one command at a time, between its other work, so a command must finish quickly. Nexigon Hub stops waiting for a pong after 15 seconds.
+To add a command, describe it in `publish_manifest` and handle it in `execute`, both in `crates/libs/pico-platform/src/nexigon/commands.rs`. The device runs one command at a time, between its other work, so a command must finish quickly. Nexigon Hub stops waiting for a pong after 15 seconds.
 
 ## Release an Update
 
-Releases are versions of a package in a repository of Nexigon Hub. Build and publish a new version:
+Releases are versions of a package in a repository of Nexigon Hub. Give each crate its own package. Build and publish a new version, for instance, of the weather station:
 
 ```sh
-mise run build
-mise run release default/rp-test
+mise run build weather-station
+mise run release weather-station default/weather-station
 ```
 
-The release uploads `target/firmware.bin` and its signature `target/firmware.bin.sig` as assets of a new version of the package `rp-test` in the repository `default`. It tags the version with the firmware version, a locked tag, and moves the tag `latest` to it.
+The release uploads `target/weather-station/firmware.bin` and its signature `firmware.bin.sig` as assets of a new version of the package `weather-station` in the repository `default`. It tags the version with the firmware version, a locked tag, and moves the tag `latest` to it.
 
-Devices built with `NEXIGON_UPDATE_PATH = "default/rp-test/latest"` install the version that the tag `latest` points to. The `dev.nexigon.ota.config` property of a device overrides the defaults built into the firmware. For instance, it pins a version with `{"path": "default/rp-test/20261120-163751"}` or holds updates with `{"hold": true}`.
+Devices built with `WEATHER_STATION_UPDATE_PATH = "default/weather-station/latest"` install the version that the tag `latest` points to. The `dev.nexigon.ota.config` property of a device overrides the defaults built into the firmware. For instance, it pins a version with `{"path": "default/weather-station/20261120-163751"}` or holds updates with `{"hold": true}`.
 
 The device checks for updates when it connects, every 5 minutes, and when it receives the command `nexigon.ota.check`. It reports its progress in the `dev.nexigon.ota.status` property. An update takes a few minutes:
 
@@ -177,21 +200,31 @@ update completed
 
 ## How It Works
 
-The core of the firmware reads the sensors and keeps the device running. Everything that concerns Nexigon is in `src/nexigon/`, which only the `nexigon` feature compiles, together with its dependencies. Its entry point is `nexigon::run`, which takes the peripherals it needs and the station with the sensors and the display. Without the feature, `src/standalone.rs` logs the measurements instead. Both variants use the same bootloader and flash layout, so a device can switch between them when flashed over USB.
+The repository is a Cargo workspace. All firmware crates share the bootloader, the flash layout in `firmware.x`, and the platform code in `pico-platform`:
 
-| File                | Purpose                                                     |
-| ------------------- | ----------------------------------------------------------- |
-| `src/main.rs`       | Start of the firmware, which hands the station to a variant |
-| `src/station.rs`    | Station, which measures and shows the measurements          |
-| `src/sensors.rs`    | Measurements of all sensors                                 |
-| `src/dht11.rs`      | Readings of the DHT11 sensor                                |
-| `src/uv.rs`         | Readings of the UV sensor                                   |
-| `src/bmp280.rs`     | Readings of the BMP280 sensor                               |
-| `src/display.rs`    | Display of the measurements on the TFT                      |
-| `src/watchdog.rs`   | Watchdog, which resets the device when it hangs             |
-| `src/standalone.rs` | Logging of measurements without Nexigon                     |
-| `src/nexigon/`      | Connection to Nexigon Hub, with the `nexigon` feature       |
-| `bootloader/`       | Bootloader that swaps in updates and rolls them back        |
+| Crate                         | Purpose                                                                     |
+| ----------------------------- | --------------------------------------------------------------------------- |
+| `crates/apps/bootloader`      | Bootloader that swaps in updates and rolls them back                        |
+| `crates/apps/weather-station` | Firmware of the weather station                                             |
+| `crates/apps/touch-display`   | Firmware of the touch display                                               |
+| `crates/libs/pico-platform`   | Watchdog, USB logger, and, with the `nexigon` feature, Nexigon Hub          |
+| `crates/libs/pico-build`      | Helpers for the build scripts of the firmware crates, which run on the host |
+
+Everything that concerns Nexigon is in `crates/libs/pico-platform/src/nexigon/`, which only the `nexigon` feature of `pico-platform` compiles, together with its dependencies. Its entry point `nexigon::run` takes the configuration of the device, the peripherals that the connection needs, and an `Application`, which provides the event that the device publishes with every heartbeat. A firmware creates its configuration with `pico_platform::nexigon_config!()`, which embeds what `pico_build::embed_nexigon_config` checks and the identity in `identity/` of the crate.
+
+The weather station enables the `nexigon` feature through its own feature of the same name. Without it, `src/standalone.rs` logs the measurements instead. Both variants use the same bootloader and flash layout, so a device can switch between them when flashed over USB.
+
+| File in `crates/apps/weather-station/src/` | Purpose                                                     |
+| ------------------------------------------ | ----------------------------------------------------------- |
+| `main.rs`                                  | Start of the firmware, which hands the station to a variant |
+| `station.rs`                               | Station, which measures and shows the measurements          |
+| `sensors.rs`                               | Measurements of all sensors                                 |
+| `dht11.rs`                                 | Readings of the DHT11 sensor                                |
+| `uv.rs`                                    | Readings of the UV sensor                                   |
+| `bmp280.rs`                                | Readings of the BMP280 sensor                               |
+| `display.rs`                               | Display of the measurements on the TFT                      |
+| `nexigon.rs`                               | Environment events, with the `nexigon` feature              |
+| `standalone.rs`                            | Logging of measurements without Nexigon                     |
 
 ### Connection to Nexigon Hub
 
@@ -211,32 +244,32 @@ All of this runs on one task, which owns the connection. While the device waits 
 
 The flash holds the bootloader, the state of the bootloader, and two slots for the firmware. `firmware.x` describes the layout:
 
-| Region           | Size     | Content                                        |
-| ---------------- | -------- | ---------------------------------------------- |
-| Bootloader       | 24 KiB   | `bootloader/`, based on `embassy-boot`         |
-| Bootloader state | 4 KiB    | Pending update and progress of swapping it in  |
-| Active slot      | 1008 KiB | Running firmware                               |
-| DFU slot         | 1012 KiB | Downloaded update                              |
+| Region           | Size     | Content                                           |
+| ---------------- | -------- | ------------------------------------------------- |
+| Bootloader       | 24 KiB   | `crates/apps/bootloader`, based on `embassy-boot` |
+| Bootloader state | 4 KiB    | Pending update and progress of swapping it in     |
+| Active slot      | 1008 KiB | Running firmware                                  |
+| DFU slot         | 1012 KiB | Downloaded update                                 |
 
 The firmware follows the OTA update contract of Nexigon Hub, which Nexigon Agent also implements. A check reads the desired state from the `dev.nexigon.ota.config` property. It resolves the version path of the configuration and the version of the running firmware, the tag `FIRMWARE_VERSION`, in the same package. If they differ, the firmware downloads the asset and its signature from the object storage of Nexigon Hub over a second TLS connection. It writes the asset to the DFU slot, verifies its signature with the release key, marks it for the bootloader, and resets. The bootloader swaps the slots and starts the new firmware, which commits itself once it reaches Nexigon Hub. If the new firmware does not commit itself within 5 minutes, the watchdog resets the device, and the bootloader swaps the old firmware back. A power failure during a swap resumes it. The firmware reports each step in the `dev.nexigon.ota.status` property.
 
-The types of the actions, command invocations, properties, and results in `src/nexigon/generated/nexigon_api.rs` are generated from the API definitions of Nexigon Hub with Sidex's `rust-embedded` backend. They read messages without copying them and borrow from the receive buffers.
+The types of the actions, command invocations, properties, and results in `generated/nexigon_api.rs` are generated from the API definitions of Nexigon Hub with Sidex's `rust-embedded` backend. They read messages without copying them and borrow from the receive buffers.
 
-| File in `src/nexigon/` | Purpose                                                     |
-| ---------------------- | ----------------------------------------------------------- |
-| `mod.rs`               | Entry point and the session with Nexigon Hub                |
-| `network.rs`           | Wi-Fi and the network stack                                 |
-| `events.rs`            | Heartbeat and environment events                            |
-| `commands.rs`          | Commands of the device                                      |
-| `ota.rs`               | Update checks following the OTA update contract             |
-| `firmware.rs`          | Firmware slots, signature verification, and commit deadline |
-| `download.rs`          | Downloads over HTTPS                                        |
-| `hub.rs`               | Session with Nexigon Hub: actions, commands, and pings      |
-| `multiplex.rs`         | Frames of the multiplex protocol                            |
-| `websocket.rs`         | WebSocket client                                            |
-| `tls.rs`               | TLS connections and client authentication                   |
-| `clock.rs`             | Clock synchronization with SNTP                             |
-| `config.rs`            | Configuration, identity, and release key                    |
+| File in `crates/libs/pico-platform/src/nexigon/` | Purpose                                                     |
+| ------------------------------------------------ | ----------------------------------------------------------- |
+| `mod.rs`                                         | Entry point, applications, and the session with Nexigon Hub |
+| `config.rs`                                      | Configuration and identity of a device                      |
+| `network.rs`                                     | Wi-Fi and the network stack                                 |
+| `events.rs`                                      | Heartbeat events and the events of applications             |
+| `commands.rs`                                    | Commands of the device                                      |
+| `ota.rs`                                         | Update checks following the OTA update contract             |
+| `firmware.rs`                                    | Firmware slots, signature verification, and commit deadline |
+| `download.rs`                                    | Downloads over HTTPS                                        |
+| `hub.rs`                                         | Session with Nexigon Hub: actions, commands, and pings      |
+| `multiplex.rs`                                   | Frames of the multiplex protocol                            |
+| `websocket.rs`                                   | WebSocket client                                            |
+| `tls.rs`                                         | TLS connections and client authentication                   |
+| `clock.rs`                                       | Clock synchronization with SNTP                             |
 
 ## Limitations
 
@@ -263,5 +296,5 @@ mise run generate:api ../nexigon
 
 The firmware is licensed under either of [Apache License, Version 2.0](LICENSE-APACHE) or [MIT License](LICENSE-MIT) at your option. Two parts keep their own licenses:
 
-- The Wi-Fi chip firmware in `firmware/cyw43/` comes from [`cyw43-driver`](https://github.com/georgerobotics/cyw43-driver/tree/main/firmware) and is licensed under the [Infineon Permissive Binary License](firmware/cyw43/LICENSE-permissive-binary-license-1.0.txt).
+- The Wi-Fi chip firmware in `crates/libs/pico-platform/firmware/cyw43/` comes from [`cyw43-driver`](https://github.com/georgerobotics/cyw43-driver/tree/main/firmware) and is licensed under the [Infineon Permissive Binary License](crates/libs/pico-platform/firmware/cyw43/LICENSE-permissive-binary-license-1.0.txt).
 - The patched `embedded-tls` in `vendor/embedded-tls/` is licensed under the [Apache License, Version 2.0](vendor/embedded-tls/LICENSE).

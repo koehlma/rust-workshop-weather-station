@@ -1,7 +1,7 @@
 //! Wi-Fi and the network stack through which the device reaches Nexigon Hub.
 //!
-//! [`start`] powers up the Wi-Fi chip of the Pico W, joins the network from
-//! [`config`], and waits for an address from DHCP. The chip does not rejoin
+//! [`start`] powers up the Wi-Fi chip of the Pico W, joins the network of the
+//! [`Config`], and waits for an address from DHCP. The chip does not rejoin
 //! the network on its own after losing it, so [`ensure_up`] joins it again.
 
 use cyw43::JoinOptions;
@@ -32,7 +32,7 @@ use log::info;
 use log::warn;
 use static_cell::StaticCell;
 
-use super::config;
+use super::config::Config;
 
 /// Delay before joining the network again after a failure.
 const RETRY_DELAY: Duration = Duration::from_secs(10);
@@ -45,17 +45,37 @@ bind_interrupts!(struct Irqs {
     DMA_IRQ_0 => dma::InterruptHandler<DMA_CH0>;
 });
 
+/// Peripherals through which the RP2040 of a Pico W drives its Wi-Fi chip.
+pub struct WifiPeripherals {
+    /// Power of the chip.
+    pub power: Peri<'static, PIN_23>,
+    /// Data line of the chip.
+    pub data: Peri<'static, PIN_24>,
+    /// Chip select of the chip.
+    pub chip_select: Peri<'static, PIN_25>,
+    /// Clock of the chip.
+    pub clock: Peri<'static, PIN_29>,
+    /// PIO block that drives the bus of the chip.
+    pub pio: Peri<'static, PIO0>,
+    /// DMA channel of the bus of the chip.
+    pub dma: Peri<'static, DMA_CH0>,
+}
+
 /// Starts the Wi-Fi chip, joins the network, and returns the network stack
 /// and the control of the chip, which also drives the LED of the Pico W.
 pub async fn start(
     spawner: Spawner,
-    power: Peri<'static, PIN_23>,
-    data: Peri<'static, PIN_24>,
-    chip_select: Peri<'static, PIN_25>,
-    clock: Peri<'static, PIN_29>,
-    pio: Peri<'static, PIO0>,
-    dma: Peri<'static, DMA_CH0>,
+    peripherals: WifiPeripherals,
+    config: &'static Config,
 ) -> (Stack<'static>, cyw43::Control<'static>) {
+    let WifiPeripherals {
+        power,
+        data,
+        chip_select,
+        clock,
+        pio,
+        dma,
+    } = peripherals;
     let wifi_firmware = aligned_bytes!("../../firmware/cyw43/43439A0.bin");
     let clm = aligned_bytes!("../../firmware/cyw43/43439A0_clm.bin");
     let nvram = aligned_bytes!("../../firmware/cyw43/nvram_rp2040.bin");
@@ -98,27 +118,35 @@ pub async fn start(
     );
     spawner.spawn(net_task(runner).unwrap());
 
-    join(stack, &mut control).await;
+    join(stack, &mut control, config).await;
     (stack, control)
 }
 
 /// Joins the network again if the device has lost its address, for instance,
 /// because the access point restarted.
-pub async fn ensure_up(stack: Stack<'static>, control: &mut cyw43::Control<'static>) {
+pub async fn ensure_up(
+    stack: Stack<'static>,
+    control: &mut cyw43::Control<'static>,
+    config: &'static Config,
+) {
     if !stack.is_config_up() {
         warn!("lost the Wi-Fi network");
         control.leave().await;
-        join(stack, control).await;
+        join(stack, control, config).await;
     }
 }
 
 /// Joins the network and waits for an address from DHCP, retrying until both
 /// succeed.
-async fn join(stack: Stack<'static>, control: &mut cyw43::Control<'static>) {
+async fn join(
+    stack: Stack<'static>,
+    control: &mut cyw43::Control<'static>,
+    config: &'static Config,
+) {
     loop {
-        info!("joining Wi-Fi network {}", config::WIFI_SSID);
-        let options = JoinOptions::new(config::WIFI_PASSWORD.as_bytes());
-        match control.join(config::WIFI_SSID, options).await {
+        info!("joining Wi-Fi network {}", config.wifi_ssid);
+        let options = JoinOptions::new(config.wifi_password.as_bytes());
+        match control.join(config.wifi_ssid, options).await {
             Ok(()) => match with_timeout(DHCP_TIMEOUT, stack.wait_config_up()).await {
                 Ok(()) => {
                     info!(

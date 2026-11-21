@@ -3,10 +3,10 @@
 //! The device reads its desired state from the `dev.nexigon.ota.config`
 //! property and reports its actual state in `dev.nexigon.ota.status`. The
 //! property applies to defaults built into the firmware, such as
-//! [`config::UPDATE_PATH`]. The
+//! [`Config::update_path`](super::Config::update_path). The
 //! configuration names a version path `<repository>/<package>/<version>`. The
 //! running firmware is the version of the package with the tag
-//! [`crate::FIRMWARE_VERSION`]. If the path resolves to another version, the
+//! [`Config::firmware_version`](super::Config::firmware_version). If the path resolves to another version, the
 //! device downloads its asset, `firmware.bin` by default, and the signature of
 //! the asset, `firmware.bin.sig`, writes the asset to the DFU slot, and resets
 //! into it. After the reset, the new firmware commits itself and reports the
@@ -48,7 +48,7 @@ use super::api::repositories::ResolvePackageVersionAssetByPathAction;
 use super::api::repositories::ResolvePackageVersionAssetByPathOutput;
 use super::api::repositories::ResolvePackageVersionByPathAction;
 use super::api::repositories::ResolvePackageVersionByPathOutput;
-use super::config;
+use super::config::Config as DeviceConfig;
 use super::download::Download;
 use super::firmware::Firmware;
 use super::hub;
@@ -99,10 +99,12 @@ pub async fn check<S: Read + Write + WaitReadable>(
     firmware: &mut Firmware,
     stack: Stack<'_>,
     buffers: &mut tls::Buffers,
+    device: &'static DeviceConfig,
 ) -> Result<Outcome, hub::Error> {
     let mut check = Check {
         session,
         device_id,
+        device,
         status_version: None,
     };
     // The status may change concurrently, for example when a user clears the
@@ -136,6 +138,7 @@ impl From<hub::Error> for CheckError {
 struct Check<'c, 's, S> {
     session: &'c mut Session<'s, S>,
     device_id: &'c str,
+    device: &'static DeviceConfig,
     /// Version of the status property, which writes compare and swap.
     status_version: Option<u64>,
 }
@@ -189,7 +192,7 @@ impl<S: Read + Write + WaitReadable> Check<'_, '_, S> {
                 .finish_failed(status, message("invalid version path"))
                 .await;
         };
-        let running_id = self.resolve(&path, crate::FIRMWARE_VERSION).await?;
+        let running_id = self.resolve(&path, self.device.firmware_version).await?;
         status.current_version_id = running_id.clone();
 
         // Find out how an attempt in progress before the reset ended.
@@ -284,6 +287,7 @@ impl<S: Read + Write + WaitReadable> Check<'_, '_, S> {
             buffers,
             &image_url,
             &signature_url,
+            self.device,
         )
         .await?;
         if let Err(error) = installed {
@@ -301,6 +305,7 @@ impl<S: Read + Write + WaitReadable> Check<'_, '_, S> {
     /// Reads the previous status, which is the only state that persists across
     /// resets.
     async fn previous_status(&mut self) -> Result<Previous, CheckError> {
+        let defaults = self.defaults();
         let action = GetDevicePropertyAction {
             device_id: DeviceId(Str::new(self.device_id)),
             name: Str::new(STATUS_PROPERTY),
@@ -327,12 +332,26 @@ impl<S: Read + Write + WaitReadable> Check<'_, '_, S> {
         previous.last_error = status.last_error.and_then(copy);
         previous.config = status
             .config
-            .and_then(|config| Config::from_api(&config).ok());
+            .and_then(|config| Config::from_api(&config, defaults).ok());
         Ok(previous)
+    }
+
+    /// Returns the configuration with only the defaults of the firmware.
+    fn defaults(&self) -> Config {
+        Config {
+            path: self
+                .device
+                .update_path
+                .and_then(|path| String::try_from(path).ok()),
+            asset: String::try_from(DEFAULT_ASSET).expect("the default asset fits"),
+            hold: false,
+            rollout: None,
+        }
     }
 
     /// Reads the configuration and its version.
     async fn config(&mut self) -> Result<(Result<Config, ConfigError>, Option<u64>), CheckError> {
+        let defaults = self.defaults();
         let action = GetDevicePropertyAction {
             device_id: DeviceId(Str::new(self.device_id)),
             name: Str::new(CONFIG_PROPERTY),
@@ -342,13 +361,13 @@ impl<S: Read + Write + WaitReadable> Check<'_, '_, S> {
             .invoke::<GetDevicePropertyOutput>("devices_GetProperty", &action)
             .await?;
         Ok(match output {
-            GetDevicePropertyOutput::NotFound => (Ok(Config::default()), None),
+            GetDevicePropertyOutput::NotFound => (Ok(defaults), None),
             GetDevicePropertyOutput::Found(property) => {
                 let config = property
                     .value
                     .decode::<OtaUpdateConfig>()
                     .map_err(|_| ConfigError::Invalid)
-                    .and_then(|config| Config::from_api(&config));
+                    .and_then(|config| Config::from_api(&config, defaults));
                 (config, Some(property.version))
             }
         })
@@ -451,7 +470,7 @@ impl<S: Read + Write + WaitReadable> Check<'_, '_, S> {
             capabilities: Some(capabilities),
             config,
             config_version: status.config_version,
-            current_version: Some(Str::new(crate::FIRMWARE_VERSION)),
+            current_version: Some(Str::new(self.device.firmware_version)),
             current_version_id: status.current_version_id.as_deref().map(version_id),
             state: Some(status.state),
             blocked,
@@ -499,10 +518,11 @@ async fn install<S: Read + Write + WaitReadable>(
     buffers: &mut tls::Buffers,
     image_url: &str,
     signature_url: &str,
+    device: &'static DeviceConfig,
 ) -> Result<Result<(), Message>, hub::Error> {
     let mut signature = [0; MAX_SIGNATURE_SIZE];
     let signature_len = {
-        let mut download = match Download::start(stack, buffers, signature_url).await {
+        let mut download = match Download::start(stack, buffers, signature_url, device).await {
             Ok(download) => download,
             Err(error) => return Ok(Err(describe("failed to download the signature", error))),
         };
@@ -520,7 +540,7 @@ async fn install<S: Read + Write + WaitReadable>(
     };
     session.poll().await?;
 
-    let mut download = match Download::start(stack, buffers, image_url).await {
+    let mut download = match Download::start(stack, buffers, image_url, device).await {
         Ok(download) => download,
         Err(error) => return Ok(Err(describe("failed to download the image", error))),
     };
@@ -620,17 +640,6 @@ struct Config {
     rollout: Option<u32>,
 }
 
-impl Default for Config {
-    fn default() -> Self {
-        Self {
-            path: config::UPDATE_PATH.and_then(|path| String::try_from(path).ok()),
-            asset: String::try_from(DEFAULT_ASSET).expect("the default asset fits"),
-            hold: false,
-            rollout: None,
-        }
-    }
-}
-
 /// Error reading the configuration.
 enum ConfigError {
     /// The configuration has a later format version.
@@ -640,7 +649,8 @@ enum ConfigError {
 }
 
 impl Config {
-    fn from_api(config: &OtaUpdateConfig<'_>) -> Result<Self, ConfigError> {
+    /// Applies the fields that `config` sets to `defaults`.
+    fn from_api(config: &OtaUpdateConfig<'_>, defaults: Self) -> Result<Self, ConfigError> {
         if config
             .format_version
             .is_some_and(|version| version > FORMAT_VERSION)
@@ -649,7 +659,7 @@ impl Config {
         }
         // Fields that the property sets replace the defaults. A simplification:
         // `null` keeps a default instead of removing it.
-        let mut result = Self::default();
+        let mut result = defaults;
         if let Some(path) = config.path {
             result.path = Some(copy(path).ok_or(ConfigError::Invalid)?);
         }

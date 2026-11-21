@@ -1,5 +1,5 @@
 [tasks.provision]
-description = "Create the identity of a new device in `identity/`."
+description = "Create the identity of a new device of a crate, for instance, `mise run provision touch-display`."
 run = "scripts/provision.sh"
 
 [tasks."create-release-key"]
@@ -7,11 +7,11 @@ description = "Create the key pair with which releases are signed in `keys/`."
 run = "scripts/create-release-key.sh"
 
 [tasks.build]
-description = "Build the bootloader and the firmware into `target/`."
+description = "Build the bootloader and the firmware of a crate into `target/<crate>/`, for instance, `mise run build weather-station`."
 run = "scripts/build.sh"
 
 [tasks.release]
-description = "Publish the firmware built last as a version of a package, for instance, `mise run release default/rp-test`."
+description = "Publish the firmware of a crate built last as a version of a package, for instance, `mise run release weather-station default/rp-test`."
 run = "scripts/release.sh"
 
 [tasks."generate:api"]

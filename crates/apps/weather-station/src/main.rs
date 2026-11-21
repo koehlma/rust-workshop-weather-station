@@ -3,10 +3,11 @@
 //! and a BMP280 pressure sensor.
 //!
 //! Every 30 seconds, the [`station`] measures the temperature, humidity, UV
-//! radiation, and air pressure and shows them on the display. With the `nexigon` feature,
-//! [`nexigon`] connects the device to Nexigon Hub, which receives the
-//! measurements as events, runs commands, and rolls out updates. Without it,
-//! [`standalone`] logs the measurements. Logs go to the USB serial port.
+//! radiation, and air pressure and shows them on the display. With the
+//! `nexigon` feature, [`nexigon`] connects the device to Nexigon Hub, which
+//! receives the measurements as events, runs commands, and rolls out updates.
+//! Without it, [`standalone`] logs the measurements. Logs go to the USB serial
+//! port.
 
 #![no_std]
 #![no_main]
@@ -21,7 +22,6 @@ mod sensors;
 mod standalone;
 mod station;
 mod uv;
-mod watchdog;
 
 use embassy_executor::Spawner;
 use embassy_rp::bind_interrupts;
@@ -33,6 +33,8 @@ use embassy_rp::watchdog::Watchdog;
 use embassy_time::Timer;
 use log::info;
 use panic_reset as _;
+use pico_platform::logger;
+use pico_platform::watchdog;
 
 use crate::bmp280::Bmp280;
 use crate::dht11::Dht11;
@@ -43,7 +45,7 @@ use crate::uv::UvSensor;
 
 /// Version of the firmware, by default the time of the build, for instance,
 /// `20261120-163000`.
-pub const FIRMWARE_VERSION: &str = env!("FIRMWARE_VERSION");
+const FIRMWARE_VERSION: &str = env!("FIRMWARE_VERSION");
 
 bind_interrupts!(struct Irqs {
     USBCTRL_IRQ => usb::InterruptHandler<USB>;
@@ -54,7 +56,7 @@ async fn main(spawner: Spawner) {
     let p = embassy_rp::init(Default::default());
     // The bootloader has started the watchdog, which must be fed from now on.
     spawner.spawn(watchdog::task(Watchdog::new(p.WATCHDOG)).unwrap());
-    spawner.spawn(logger_task(usb::Driver::new(p.USB, Irqs)).unwrap());
+    spawner.spawn(logger::task(usb::Driver::new(p.USB, Irqs)).unwrap());
     // Give the host time to open the USB serial port, so that it receives
     // the first messages.
     Timer::after_secs(3).await;
@@ -82,14 +84,16 @@ async fn main(spawner: Spawner) {
     #[cfg(feature = "nexigon")]
     nexigon::run(
         spawner,
-        nexigon::Peripherals {
+        pico_platform::nexigon::Peripherals {
             flash: p.FLASH,
-            wifi_power: p.PIN_23,
-            wifi_data: p.PIN_24,
-            wifi_chip_select: p.PIN_25,
-            wifi_clock: p.PIN_29,
-            wifi_pio: p.PIO0,
-            wifi_dma: p.DMA_CH0,
+            wifi: pico_platform::nexigon::WifiPeripherals {
+                power: p.PIN_23,
+                data: p.PIN_24,
+                chip_select: p.PIN_25,
+                clock: p.PIN_29,
+                pio: p.PIO0,
+                dma: p.DMA_CH0,
+            },
         },
         station,
     )
@@ -97,9 +101,4 @@ async fn main(spawner: Spawner) {
 
     #[cfg(not(feature = "nexigon"))]
     standalone::run(station).await;
-}
-
-#[embassy_executor::task]
-async fn logger_task(driver: usb::Driver<'static, USB>) {
-    embassy_usb_logger::run!(1024, log::LevelFilter::Info, driver);
 }

@@ -1,7 +1,7 @@
 //! Events that the device publishes with `devices_PublishEvents`.
 //!
-//! [`publish`] sends a heartbeat event and, if a sensor answered, an
-//! environment event with its readings.
+//! [`publish`] sends a heartbeat event and, if the application provides one,
+//! an event of the application, for instance, with the readings of sensors.
 
 use core::fmt::Write as _;
 
@@ -25,29 +25,25 @@ use super::api::outputs::Empty;
 use super::clock;
 use super::hub;
 use super::tls;
-use crate::sensors::Measurement;
 
-/// Publishes a heartbeat event and, if a sensor answered, an environment
-/// event.
+/// Publishes a heartbeat event and, if there is one, the event of the
+/// application in `extra`, given by its category and its body.
 pub async fn publish(
     session: &mut hub::Session<'_, tls::Connection<'_>>,
     device_id: &str,
-    measurement: &Measurement,
+    firmware_version: &str,
+    extra: Option<(&str, &dyn Encode)>,
 ) -> Result<(), hub::Error> {
     let now = clock::now().expect("the clock is synchronized before connecting");
     let heartbeat_id = event_id(now);
     let heartbeat = Heartbeat {
         uptime_seconds: Instant::now().as_secs(),
+        firmware_version,
     };
-    let environment_id = event_id(now);
-    let environment = (!measurement.is_empty()).then_some(Environment(measurement));
+    let extra_id = event_id(now);
     let events: heapless::Vec<DeviceEvent<'_>, 2> =
         core::iter::once(info_event(&heartbeat_id, "heartbeat", &heartbeat, now))
-            .chain(
-                environment.as_ref().map(|environment| {
-                    info_event(&environment_id, "environment", environment, now)
-                }),
-            )
+            .chain(extra.map(|(category, body)| info_event(&extra_id, category, body, now)))
             .collect();
     let action = PublishDeviceEventsAction {
         device_id: DeviceId(Str::new(device_id)),
@@ -106,42 +102,16 @@ fn event_id(now: Timestamp) -> heapless::String<32> {
 }
 
 /// Body of heartbeat events.
-struct Heartbeat {
+struct Heartbeat<'a> {
     uptime_seconds: u64,
+    firmware_version: &'a str,
 }
 
-impl Encode for Heartbeat {
+impl Encode for Heartbeat<'_> {
     fn encode(&self, writer: &mut Writer<'_>) -> Result<(), EncodeError> {
         let mut object = writer.object()?;
         self.uptime_seconds.encode(object.field("uptimeSeconds")?)?;
-        Str::new(crate::FIRMWARE_VERSION).encode(object.field("firmwareVersion")?)?;
-        object.end()
-    }
-}
-
-/// Body of environment events, with the fields of the sensors that answered.
-struct Environment<'a>(&'a Measurement);
-
-impl Encode for Environment<'_> {
-    fn encode(&self, writer: &mut Writer<'_>) -> Result<(), EncodeError> {
-        let mut object = writer.object()?;
-        if let Some(reading) = &self.0.dht11 {
-            reading
-                .temperature_celsius
-                .encode(object.field("temperatureCelsius")?)?;
-            reading
-                .humidity_percent
-                .encode(object.field("humidityPercent")?)?;
-        }
-        if let Some(reading) = &self.0.uv {
-            reading.uv_index.encode(object.field("uvIndex")?)?;
-            reading.volts.encode(object.field("uvVolts")?)?;
-        }
-        if let Some(reading) = &self.0.bmp280 {
-            reading
-                .pressure_hectopascals
-                .encode(object.field("pressureHectopascals")?)?;
-        }
+        Str::new(self.firmware_version).encode(object.field("firmwareVersion")?)?;
         object.end()
     }
 }
