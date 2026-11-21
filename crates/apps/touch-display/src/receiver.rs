@@ -9,10 +9,12 @@
 //! sets, and rejects repeated sequence numbers. It adds every accepted
 //! measurement to the [`Storage`] and the [`History`].
 //!
-//! The [`Display`] shows the latest measurement and a plot of the history of
-//! one [`Metric`], which changes every [`METRIC_INTERVAL`]. A tap on the touch
-//! screen switches to the next [`Interval`], whose history the task then
-//! reads from the storage.
+//! The [`Display`] shows the latest measurements, a plot of the history of
+//! one [`Metric`], and the state of the device. The plot shows the next
+//! metric every [`REFRESH_INTERVAL`]. A tap on a tile shows its metric, a tap
+//! on the plot shows the next metric, and a tap on a chip shows its
+//! [`Interval`], whose history the task then reads from the storage. After a
+//! tap, the metric stays for [`HOLD_AFTER_TAP`].
 //!
 //! A measurement without `measuredAt` gets the time of its reception. While
 //! the clock of the touch display is not synchronized either, up to
@@ -54,8 +56,10 @@ use crate::history::BUCKETS;
 use crate::history::History;
 use crate::history::Interval;
 use crate::history::Metric;
+use crate::screen;
 use crate::screen::Screen;
-use crate::storage;
+use crate::screen::Status;
+use crate::screen::Target;
 use crate::storage::DAY_SECONDS;
 use crate::storage::Storage;
 use crate::touch::Touch;
@@ -66,8 +70,14 @@ pub const PORT: u16 = 4242;
 /// Maximum number of measurements that wait for the clock.
 const UNTIMED_CAPACITY: usize = 16;
 
-/// Time for which the plot shows a metric before it shows the next one.
-const METRIC_INTERVAL: Duration = Duration::from_secs(10);
+/// Interval at which the screen shows the next metric and updates the state.
+const REFRESH_INTERVAL: Duration = Duration::from_secs(10);
+
+/// Time for which the plot keeps its metric after a tap.
+const HOLD_AFTER_TAP: Duration = Duration::from_secs(60);
+
+/// Age after which measurements count as outdated, four missed measurements.
+const STALE_AFTER: Duration = Duration::from_secs(150);
 
 /// IP address of the weather station, if configured.
 static SENSOR_ADDRESS: Mutex<CriticalSectionRawMutex, Cell<Option<Ipv4Addr>>> =
@@ -136,17 +146,19 @@ pub async fn task(
         last_sequence: None,
         untimed: Deque::new(),
         latest: None,
+        rejected: None,
         history: History::new(Interval::Day),
         loaded: false,
         metric: Metric::Temperature,
+        hold_until: Instant::now(),
     };
-    let mut next_metric = Instant::now() + METRIC_INTERVAL;
+    let mut next_refresh = Instant::now() + REFRESH_INTERVAL;
     loop {
         receiver.load(&mut storage, &mut display).await;
-        receiver.show(&mut display, &storage, None);
+        receiver.show(&mut display, &storage, false);
         let deadline = storage
             .checkpoint_deadline()
-            .map_or(next_metric, |checkpoint| checkpoint.min(next_metric));
+            .map_or(next_refresh, |checkpoint| checkpoint.min(next_refresh));
         let event = select3(
             socket.recv_from(&mut datagram),
             Timer::at(deadline),
@@ -165,23 +177,24 @@ pub async fn task(
                 REJECTED.add(1, Ordering::Relaxed);
             }
             Either3::Second(()) => {
+                let now = Instant::now();
                 if storage
                     .checkpoint_deadline()
-                    .is_some_and(|checkpoint| checkpoint <= Instant::now())
+                    .is_some_and(|checkpoint| checkpoint <= now)
                 {
                     storage.checkpoint();
                 }
-                if next_metric <= Instant::now() {
-                    receiver.metric = receiver.metric.next();
-                    next_metric = Instant::now() + METRIC_INTERVAL;
+                if next_refresh <= now {
+                    if receiver.hold_until <= now {
+                        receiver.metric = receiver.metric.next();
+                    }
+                    next_refresh = now + REFRESH_INTERVAL;
                 }
             }
-            Either3::Third(()) => {
-                let interval = receiver.history.interval().next();
-                info!("showing the last {}", interval.label());
-                receiver.history.reset(interval);
-                receiver.loaded = false;
-                next_metric = Instant::now() + METRIC_INTERVAL;
+            Either3::Third(point) => {
+                let target = screen::target_at(point);
+                info!("tap at ({}, {}) selects {target:?}", point.x, point.y);
+                receiver.select(target);
             }
         }
     }
@@ -194,14 +207,19 @@ struct Receiver {
     /// Measurements that wait for the clock, with the time of their
     /// reception.
     untimed: Deque<(Instant, Measurement), UNTIMED_CAPACITY>,
-    /// Latest accepted measurement.
-    latest: Option<Measurement>,
+    /// Latest accepted measurement with the time of its reception.
+    latest: Option<(Instant, Measurement)>,
+    /// Latest datagram from another address than the weather station, with
+    /// the time of its reception.
+    rejected: Option<(Instant, IpAddress)>,
     /// Measurements of the interval that the plot shows.
     history: History,
     /// Indicates whether the history holds the measurements of the storage.
     loaded: bool,
     /// Metric that the plot shows.
     metric: Metric,
+    /// Time until which the plot keeps its metric.
+    hold_until: Instant,
 }
 
 impl Receiver {
@@ -215,6 +233,7 @@ impl Receiver {
         };
         if sender.addr != IpAddress::Ipv4(address) {
             warn!("rejected a datagram from {sender}: expected {address}");
+            self.rejected = Some((Instant::now(), sender.addr));
             return None;
         }
         let Some(measurement) = core::str::from_utf8(datagram)
@@ -248,7 +267,7 @@ impl Receiver {
     /// Adds `measurement` to `storage`, after the measurements that wait for
     /// the clock.
     fn add(&mut self, storage: &mut Storage, measurement: Measurement) {
-        self.latest = Some(measurement);
+        self.latest = Some((Instant::now(), measurement));
         let time = measurement
             .measured_at
             .and_then(|time| u32::try_from(time.unix_seconds()).ok());
@@ -267,7 +286,9 @@ impl Receiver {
                         warn!("dropped a measurement without time");
                         self.untimed.pop_front();
                     }
-                    let _ = self.untimed.push_back((Instant::now(), measurement));
+                    self.untimed
+                        .push_back((Instant::now(), measurement))
+                        .expect("the queue is not full after dropping the oldest measurement");
                 }
             },
         }
@@ -279,6 +300,21 @@ impl Receiver {
         if self.loaded {
             self.history.add(record);
         }
+    }
+
+    /// Applies a tap on `target`.
+    fn select(&mut self, target: Target) {
+        match target {
+            Target::Metric(metric) => self.metric = metric,
+            Target::Plot => self.metric = self.metric.next(),
+            Target::Interval(interval) => {
+                if interval != self.history.interval() {
+                    self.history.reset(interval);
+                    self.loaded = false;
+                }
+            }
+        }
+        self.hold_until = Instant::now() + HOLD_AFTER_TAP;
     }
 
     /// Reads the history from `storage`, once the clock is synchronized, if
@@ -293,7 +329,7 @@ impl Receiver {
         let Some(now) = nexigon::unix_seconds() else {
             return;
         };
-        self.show(display, storage, Some("Reading the SD card"));
+        self.show(display, storage, true);
         let now = now as u32;
         let start = now.saturating_sub(self.history.interval().seconds());
         let started = Instant::now();
@@ -304,6 +340,7 @@ impl Receiver {
                     history.add(record);
                 }
             });
+            // The storage logs the error, and the screen shows it.
             if result.is_err() {
                 break;
             }
@@ -317,51 +354,87 @@ impl Receiver {
         self.loaded = true;
     }
 
-    /// Shows the latest measurement, the plot, and `note` or the state of
-    /// `storage`.
-    fn show(&self, display: &mut Display, storage: &Storage, note: Option<&str>) {
-        let columns = match nexigon::unix_seconds() {
+    /// Shows the latest measurements, the plot, and the state of the device,
+    /// which is reading the history if `loading` is set.
+    fn show(&self, display: &mut Display, storage: &Storage, loading: bool) {
+        let now = nexigon::unix_seconds();
+        let columns = match now {
             Some(now) if self.loaded => self.history.columns(self.metric, now as u32),
             _ => [None; BUCKETS],
         };
-        let value = |metric: Metric| self.latest.and_then(|latest| latest.value(metric));
-        let mut details = String::<64>::new();
-        for metric in Metric::ALL
-            .into_iter()
-            .filter(|metric| *metric != self.metric)
-        {
-            let _ = match (metric, value(metric)) {
-                (Metric::UvIndex, Some(value)) => write!(details, "UV {value:.1}   "),
-                (_, Some(value)) => write!(
-                    details,
-                    "{value:.precision$} {}   ",
-                    metric.unit(),
-                    precision = metric.precision()
-                ),
-                (_, None) => write!(details, "{} -   ", metric.label()),
-            };
-        }
-        let counts = storage::counts();
-        let mut status = String::<40>::new();
-        // Text that does not fit is cut off.
-        let _ = match note {
-            Some(note) => status.write_str(note),
-            None if storage.has_failed() => status.write_str("SD card failed"),
-            None => write!(
-                status,
-                "Stored {}, buffered {}",
-                counts.stored, counts.buffered
-            ),
+        let notice = if loading {
+            Some("Reading the SD card")
+        } else if now.is_none() {
+            Some("Waiting for the clock")
+        } else {
+            None
         };
+        let mut status_text = String::<48>::new();
+        let status = self.status(storage, loading, &mut status_text);
+        let values = Metric::ALL.map(|metric| {
+            self.latest
+                .and_then(|(_, measurement)| measurement.value(metric))
+        });
         display.show(&Screen {
+            values,
+            stale: self
+                .latest
+                .is_none_or(|(received, _)| received.elapsed() > STALE_AFTER),
             metric: self.metric,
-            value: value(self.metric),
-            details: details.trim_end(),
             interval: self.history.interval(),
             columns: &columns,
-            status: &status,
+            notice,
+            hint: SENSOR_ADDRESS
+                .lock(Cell::get)
+                .is_none()
+                .then_some("Set sensorAddress in touch-display.config"),
+            status,
+            status_text: &status_text,
             firmware_version: crate::CONFIG.firmware_version,
         });
+    }
+
+    /// Describes the state of the device in `text` and returns its kind.
+    fn status(&self, storage: &Storage, loading: bool, text: &mut String<48>) -> Status {
+        // Texts are shorter than the capacity.
+        let (status, _) = if loading {
+            let interval = self.history.interval().label();
+            (
+                Status::Busy,
+                write!(text, "Reading {interval} from the SD card"),
+            )
+        } else if storage.has_failed() {
+            (
+                Status::Error,
+                text.write_str("SD card failed, check the card"),
+            )
+        } else if SENSOR_ADDRESS.lock(Cell::get).is_none() {
+            (
+                Status::Warning,
+                text.write_str("No weather station configured"),
+            )
+        } else if let Some((rejected, sender)) = self.rejected
+            && rejected.elapsed() < STALE_AFTER
+            && self.latest.is_none_or(|(received, _)| received < rejected)
+        {
+            (Status::Warning, write!(text, "Ignoring data from {sender}"))
+        } else {
+            match self.latest.map(|(received, _)| received.elapsed()) {
+                None => (
+                    Status::Warning,
+                    text.write_str("Waiting for the weather station"),
+                ),
+                Some(age) if age > STALE_AFTER => (
+                    Status::Warning,
+                    write!(text, "No data for {} min", age.as_secs() / 60),
+                ),
+                Some(age) => (
+                    Status::Ok,
+                    write!(text, "Recording \u{b7} updated {} s ago", age.as_secs()),
+                ),
+            }
+        };
+        status
     }
 }
 

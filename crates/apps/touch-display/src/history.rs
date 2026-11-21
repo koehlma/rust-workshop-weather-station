@@ -24,17 +24,15 @@ pub enum Interval {
 }
 
 impl Interval {
-    /// Returns the interval that follows this one when the screen is touched.
-    pub fn next(self) -> Self {
-        match self {
-            Self::Hour => Self::ThreeHours,
-            Self::ThreeHours => Self::SixHours,
-            Self::SixHours => Self::Day,
-            Self::Day => Self::Week,
-            Self::Week => Self::Month,
-            Self::Month => Self::Hour,
-        }
-    }
+    /// All intervals, from the shortest to the longest.
+    pub const ALL: [Interval; 6] = [
+        Interval::Hour,
+        Interval::ThreeHours,
+        Interval::SixHours,
+        Interval::Day,
+        Interval::Week,
+        Interval::Month,
+    ];
 
     /// Returns the length of the interval in seconds.
     pub fn seconds(self) -> u32 {
@@ -77,15 +75,15 @@ impl Interval {
         }
     }
 
-    /// Returns the labels of the start and the middle of the interval.
-    pub fn labels(self) -> [&'static str; 2] {
+    /// Returns the label of the start of the interval.
+    pub fn start_label(self) -> &'static str {
         match self {
-            Self::Hour => ["-1 h", "-30 min"],
-            Self::ThreeHours => ["-3 h", "-1.5 h"],
-            Self::SixHours => ["-6 h", "-3 h"],
-            Self::Day => ["-24 h", "-12 h"],
-            Self::Week => ["-7 d", "-3.5 d"],
-            Self::Month => ["-30 d", "-15 d"],
+            Self::Hour => "-1 h",
+            Self::ThreeHours => "-3 h",
+            Self::SixHours => "-6 h",
+            Self::Day => "-24 h",
+            Self::Week => "-7 d",
+            Self::Month => "-30 d",
         }
     }
 }
@@ -111,10 +109,19 @@ impl Metric {
         Metric::Pressure,
     ];
 
+    /// Returns the position of the metric in [`Metric::ALL`].
+    pub fn index(self) -> usize {
+        match self {
+            Self::Temperature => 0,
+            Self::Humidity => 1,
+            Self::UvIndex => 2,
+            Self::Pressure => 3,
+        }
+    }
+
     /// Returns the metric that the plot shows after this one.
     pub fn next(self) -> Self {
-        let index = Self::ALL.iter().position(|metric| *metric == self).unwrap();
-        Self::ALL[(index + 1) % Self::ALL.len()]
+        Self::ALL[(self.index() + 1) % Self::ALL.len()]
     }
 
     /// Returns the name of the metric.
@@ -140,8 +147,8 @@ impl Metric {
     /// Returns the number of digits after the decimal point.
     pub fn precision(self) -> usize {
         match self {
-            Self::Humidity => 0,
-            _ => 1,
+            Self::Temperature | Self::UvIndex => 1,
+            Self::Humidity | Self::Pressure => 0,
         }
     }
 
@@ -173,6 +180,8 @@ pub struct Column {
     pub min: f32,
     pub max: f32,
     pub mean: f32,
+    /// Number of measurements.
+    pub count: u16,
 }
 
 /// Values of a metric in a bucket.
@@ -260,7 +269,7 @@ impl History {
     /// Returns the summaries of `metric` in the interval up to `now` in Unix
     /// seconds, oldest first.
     pub fn columns(&self, metric: Metric, now: u32) -> [Option<Column>; BUCKETS] {
-        let index = Metric::ALL.iter().position(|m| *m == metric).unwrap();
+        let index = metric.index();
         let last = self.interval.bucket(now);
         core::array::from_fn(|offset| {
             let bucket = (last + 1).checked_sub((BUCKETS - offset) as u32)?;
@@ -270,6 +279,7 @@ impl History {
                 min: stats.min,
                 max: stats.max,
                 mean: stats.sum / f32::from(stats.count),
+                count: stats.count,
             })
         })
     }

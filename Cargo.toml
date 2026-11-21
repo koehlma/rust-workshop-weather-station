@@ -42,6 +42,7 @@ pico-platform = { path = "crates/libs/pico-platform" }
 # Only enables a feature: The RP2040 lacks atomic compare-and-swap instructions, which
 # `static_cell` needs, so atomics use critical sections instead.
 portable-atomic = { version = "1", features = ["critical-section"] }
+profont = "0.7"
 sha2 = { version = "0.10", default-features = false }
 sidex-embedded = { git = "https://github.com/silitics/sidex", branch = "work/agents/rust-embedded" }
 signature = { version = "2", default-features = false }

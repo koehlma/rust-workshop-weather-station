@@ -169,11 +169,30 @@ Only Nexigon Hub can change a protected property, not the device itself. Without
 
 ### Screen
 
-The touch display shows the latest value of one quantity, the latest values of the others, and a plot of the stored measurements of the quantity. The plot changes between temperature, humidity, UV index, and air pressure every 10 seconds. It covers the last 24 hours. A tap anywhere on the screen changes the interval to 7 days, 30 days, 1 hour, 3 hours, 6 hours, and back to 24 hours. The interval appears in the top right corner.
+The screen has four parts, from top to bottom:
 
-Each of the 288 columns of the plot summarizes the measurements of a bucket of the interval, for instance, 5 minutes of the last 24 hours. A dark band spans from their minimum to their maximum, and a bright line connects their means. Gaps of up to 2 minutes are interpolated, so that the plots of 1 and 3 hours stay continuous although their columns are shorter than the 30 seconds between two measurements. Longer gaps stay empty. The vertical axis fits the measurements of the interval.
+- **Tiles** with the latest temperature, humidity, UV index, and air pressure. Each quantity has its own color. The tile of the plotted quantity is highlighted in it. Values turn gray when no measurement has arrived for 2.5 minutes.
+- **Plot** of the plotted quantity, with its minimum, mean, and maximum in the interval above it and gridlines at round values.
+- **Chips** of the intervals: 1 hour, 3 hours, 6 hours, 24 hours, 7 days, and 30 days. The selected interval is filled.
+- **State** of the device, with a colored dot, and the version of the firmware.
 
-The touch display keeps the summaries of the interval in memory and adds every new measurement to them. When the interval changes, and after a restart once the clock is synchronized, it reads the measurements of the interval from the card. While it reads, the screen shows "Reading the SD card".
+The plot changes to the next quantity every 10 seconds and covers the last 24 hours after a start. A tap on a tile plots its quantity, a tap on the plot plots the next one, and a tap on a chip selects its interval. After a tap, the plot keeps its quantity for a minute.
+
+| State                           | Dot   | Meaning                                                               |
+| ------------------------------- | ----- | --------------------------------------------------------------------- |
+| Recording · updated 12 s ago    | Green | Measurements arrive and are stored                                    |
+| Waiting for the weather station | Amber | No measurement has arrived since the start                            |
+| No data for 3 min               | Amber | The weather station has not sent a measurement for a while            |
+| Ignoring data from 10.10.2.99   | Amber | Measurements arrive from another address than `sensorAddress`         |
+| No weather station configured   | Amber | `touch-display.config` has no `sensorAddress`                         |
+| SD card failed, check the card  | Red   | The card is missing or cannot be written                              |
+| Reading 24 h from the SD card   | Gray  | The touch display reads the measurements of a newly selected interval |
+
+Each of the 288 columns of the plot summarizes the measurements of a bucket of the interval, for instance, 5 minutes of the last 24 hours. A band spans from their minimum to their maximum over an area that fades towards the bottom, and a line connects their means. Gaps of up to 2 minutes are interpolated, so that the plots of 1 and 3 hours stay continuous although their columns are shorter than the 30 seconds between two measurements. Longer gaps stay empty.
+
+The touch display keeps the summaries of the interval in memory and adds every new measurement to them. When the interval changes, and after a restart once the clock is synchronized, it reads the measurements of the interval from the card.
+
+The display draws each frame in strips of 24 rows in memory and sends each strip in one transfer, so the screen never shows a partially drawn frame. The values use the [ProFont](https://github.com/wezm/profont) typeface.
 
 ### Storage Format
 
@@ -215,7 +234,7 @@ With every heartbeat, the touch display publishes a `storage` event with counts 
 
 ### Pins
 
-The display runs in landscape, as in the example code of Waveshare. The firmware detects taps with the interrupt line of the XPT2046 touch controller and does not read the position of a touch.
+The display runs in landscape, as in the example code of Waveshare. The XPT2046 touch controller signals touches on its interrupt line, and the firmware then measures their position. It uses the calibration of Waveshare's example code for this orientation. Calibrations vary between panels, so the targets on the screen are large and the log records the position and target of every tap.
 
 | Signal                  | GPIO |
 | ----------------------- | ---- |
@@ -305,9 +324,10 @@ The weather station enables the `nexigon` feature through its own feature of the
 | `storage.rs`                             | Files on the microSD card and writing of blocks                                    |
 | `format.rs`                              | Binary format of the files                                                         |
 | `display.rs`                             | Display                                                                            |
+| `strip.rs`                               | Strips of the screen in memory                                                     |
 | `screen.rs`                              | Layout of the screen and the plot                                                  |
 | `history.rs`                             | Summaries of the measurements of an interval for the plot                          |
-| `touch.rs`                               | Taps on the touch screen                                                           |
+| `touch.rs`                               | Positions of taps on the touch screen                                              |
 
 ### Connection to Nexigon Hub
 

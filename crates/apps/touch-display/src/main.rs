@@ -29,6 +29,7 @@ mod history;
 mod receiver;
 mod screen;
 mod storage;
+mod strip;
 mod touch;
 
 use core::cell::RefCell;

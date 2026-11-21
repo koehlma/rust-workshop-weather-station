@@ -3,7 +3,9 @@
 //! The display is an ST7789 with 240 × 320 pixels on the shared [`Bus`].
 //! [`Display::new`] starts it in landscape, as in the example code of
 //! Waveshare: RGB, without color inversion, and mirrored horizontally with
-//! rows and columns swapped. [`Display::show`] draws a [`Screen`].
+//! rows and columns swapped. [`Display::show`] draws a [`Screen`] strip by
+//! strip and sends each [`Strip`] in one transfer, so that the screen never
+//! shows a partially drawn frame.
 
 use embassy_embedded_hal::shared_bus::blocking::spi::SpiDeviceWithConfig;
 use embassy_rp::Peri;
@@ -30,8 +32,11 @@ use mipidsi::options::Rotation;
 use static_cell::StaticCell;
 
 use crate::Bus;
-use crate::screen;
+use crate::screen::Frame;
 use crate::screen::Screen;
+use crate::strip::SCREEN_HEIGHT;
+use crate::strip::STRIP_HEIGHT;
+use crate::strip::Strip;
 
 /// Clock frequency of the display. Waveshare tested writes at up to 60 MHz.
 const SPI_FREQUENCY: u32 = 32_000_000;
@@ -57,6 +62,7 @@ pub struct Pins {
 /// Display of the board.
 pub struct Display {
     display: mipidsi::Display<Interface, ST7789, Output<'static>>,
+    strip: &'static mut Strip,
     /// Keeps the backlight on.
     _backlight: Output<'static>,
 }
@@ -86,15 +92,24 @@ impl Display {
         display
             .clear(Rgb565::BLACK)
             .expect("the SPI bus and the pins of the display do not fail");
+        static STRIP: StaticCell<Strip> = StaticCell::new();
         Self {
             display,
+            strip: STRIP.init(Strip::new()),
             _backlight: backlight,
         }
     }
 
     /// Draws `screen`, replacing what the display showed before.
     pub fn show(&mut self, screen: &Screen) {
-        screen::draw(&mut self.display, screen)
-            .expect("the SPI bus and the pins of the display do not fail");
+        let frame = Frame::new(screen);
+        for top in (0..SCREEN_HEIGHT).step_by(STRIP_HEIGHT as usize) {
+            self.strip.move_to(top as i32);
+            let Ok(()) = frame.draw(self.strip);
+            let area = self.strip.bounding_box();
+            self.display
+                .fill_contiguous(&area, self.strip.pixels().iter().copied())
+                .expect("the SPI bus and the pins of the display do not fail");
+        }
     }
 }

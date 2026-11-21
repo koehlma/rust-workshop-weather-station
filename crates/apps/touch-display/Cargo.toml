@@ -22,6 +22,7 @@ mipidsi.workspace = true
 panic-reset.workspace = true
 pico-platform = { workspace = true, features = ["nexigon"] }
 portable-atomic.workspace = true
+profont.workspace = true
 static_cell.workspace = true
 
 [build-dependencies]
