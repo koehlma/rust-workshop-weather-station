@@ -1,7 +1,7 @@
 //! Events that the device publishes with `devices_PublishEvents`.
 //!
-//! [`publish`] sends a heartbeat event and, if there is a reading of the
-//! sensor, an environment event with the temperature and humidity.
+//! [`publish`] sends a heartbeat event and, if a sensor answered, an
+//! environment event with its readings.
 
 use core::fmt::Write as _;
 
@@ -25,14 +25,14 @@ use super::api::outputs::Empty;
 use super::clock;
 use super::hub;
 use super::tls;
-use crate::dht11;
+use crate::sensors::Measurement;
 
-/// Publishes a heartbeat event and, if there is a reading of the sensor, an
-/// environment event.
+/// Publishes a heartbeat event and, if a sensor answered, an environment
+/// event.
 pub async fn publish(
     session: &mut hub::Session<'_, tls::Connection<'_>>,
     device_id: &str,
-    reading: Option<dht11::Reading>,
+    measurement: &Measurement,
 ) -> Result<(), hub::Error> {
     let now = clock::now().expect("the clock is synchronized before connecting");
     let heartbeat_id = event_id(now);
@@ -40,7 +40,7 @@ pub async fn publish(
         uptime_seconds: Instant::now().as_secs(),
     };
     let environment_id = event_id(now);
-    let environment = reading.map(Environment);
+    let environment = (!measurement.is_empty()).then_some(Environment(measurement));
     let events: heapless::Vec<DeviceEvent<'_>, 2> =
         core::iter::once(info_event(&heartbeat_id, "heartbeat", &heartbeat, now))
             .chain(
@@ -119,18 +119,24 @@ impl Encode for Heartbeat {
     }
 }
 
-/// Body of environment events.
-struct Environment(dht11::Reading);
+/// Body of environment events, with the fields of the sensors that answered.
+struct Environment<'a>(&'a Measurement);
 
-impl Encode for Environment {
+impl Encode for Environment<'_> {
     fn encode(&self, writer: &mut Writer<'_>) -> Result<(), EncodeError> {
         let mut object = writer.object()?;
-        self.0
-            .temperature_celsius
-            .encode(object.field("temperatureCelsius")?)?;
-        self.0
-            .humidity_percent
-            .encode(object.field("humidityPercent")?)?;
+        if let Some(reading) = &self.0.dht11 {
+            reading
+                .temperature_celsius
+                .encode(object.field("temperatureCelsius")?)?;
+            reading
+                .humidity_percent
+                .encode(object.field("humidityPercent")?)?;
+        }
+        if let Some(reading) = &self.0.uv {
+            reading.uv_index.encode(object.field("uvIndex")?)?;
+            reading.volts.encode(object.field("uvVolts")?)?;
+        }
         object.end()
     }
 }

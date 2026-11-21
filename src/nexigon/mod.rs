@@ -1,11 +1,11 @@
 //! Connection to Nexigon Hub, enabled by the `nexigon` feature.
 //!
-//! [`run`] takes the [`Peripherals`] that the connection needs and the sensor.
+//! [`run`] takes the [`Peripherals`] that the connection needs and the sensors.
 //! It joins a Wi-Fi network, synchronizes the clock with SNTP, and connects to
 //! Nexigon Hub over TLS with the device certificate. It learns the device ID
 //! with `actor_GetActor`, describes the commands of the device, and checks for
-//! updates. Every 30 seconds, it publishes a heartbeat event and the reading
-//! of the sensor as an environment event.
+//! updates. Every 30 seconds, it publishes a heartbeat event and the
+//! measurement of the sensors as an environment event.
 //!
 //! Outside of this module, nothing depends on Nexigon. The module uses
 //! [`crate::watchdog`] to roll back updates that do not commit themselves.
@@ -54,7 +54,7 @@ use self::api::actor::Actor;
 use self::api::actor::GetActorAction;
 use self::api::actor::GetActorOutput;
 use self::firmware::Firmware;
-use crate::dht11::Dht11;
+use crate::sensors::Sensors;
 
 /// Interval between heartbeat and environment events.
 const EVENT_INTERVAL: Duration = Duration::from_secs(30);
@@ -85,7 +85,7 @@ pub struct Peripherals {
 
 /// Connects to Nexigon Hub, publishes events, runs commands, and installs
 /// updates, reconnecting after failures.
-pub async fn run(spawner: Spawner, peripherals: Peripherals, mut sensor: Dht11<'static>) -> ! {
+pub async fn run(spawner: Spawner, peripherals: Peripherals, mut sensors: Sensors) -> ! {
     let mut firmware = Firmware::new(peripherals.flash);
     if firmware.awaits_commit() {
         info!("running a new firmware, which commits itself once it reaches Nexigon Hub");
@@ -141,7 +141,7 @@ pub async fn run(spawner: Spawner, peripherals: Peripherals, mut sensor: Dht11<'
                     &mut session,
                     &mut device,
                     &mut firmware,
-                    &mut sensor,
+                    &mut sensors,
                     stack,
                     download_buffers,
                 )
@@ -167,7 +167,7 @@ async fn serve(
     session: &mut hub::Session<'_, tls::Connection<'_>>,
     device: &mut commands::Device<'_>,
     firmware: &mut Firmware,
-    sensor: &mut Dht11<'_>,
+    sensors: &mut Sensors,
     stack: Stack<'_>,
     download_buffers: &mut tls::Buffers,
 ) -> Result<Infallible, hub::Error> {
@@ -205,17 +205,12 @@ async fn serve(
                 next_update_check = Instant::now();
             }
         } else if Instant::now() >= next_heartbeat {
-            let reading = match sensor.read().await {
-                Ok(reading) => Some(reading),
-                Err(error) => {
-                    warn!("failed to read the DHT11 sensor: {error}");
-                    None
-                }
-            };
-            events::publish(session, &device_id, reading).await?;
-            match reading {
-                Some(reading) => info!("published heartbeat and {reading}"),
-                None => info!("published heartbeat"),
+            let measurement = sensors.measure().await;
+            events::publish(session, &device_id, &measurement).await?;
+            if measurement.is_empty() {
+                info!("published heartbeat");
+            } else {
+                info!("published heartbeat and {measurement}");
             }
             next_heartbeat += EVENT_INTERVAL;
         }

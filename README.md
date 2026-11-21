@@ -1,8 +1,8 @@
 # Weather Station on the Raspberry Pi Pico W
 
-Firmware for a weather station built from a Raspberry Pi Pico W (RP2040) and a DHT11 sensor. Every 30 seconds, it reads the temperature and humidity. It is written in Rust with [Embassy](https://embassy.dev) and runs without an operating system or an allocator.
+Firmware for a weather station built from a Raspberry Pi Pico W (RP2040), a DHT11 sensor, and a SEN-UV01 UV sensor. Every 30 seconds, it measures the temperature, humidity, and UV radiation. It is written in Rust with [Embassy](https://embassy.dev) and runs without an operating system or an allocator.
 
-The `nexigon` feature, which is enabled by default, connects the weather station to Nexigon Hub. Every 30 seconds, the device publishes a heartbeat event and the reading of the sensor. It runs commands that Nexigon Hub sends and installs updates that Nexigon Hub rolls out. A bootloader swaps in updates and rolls back those that fail. Without the feature, the firmware logs the readings to the USB serial port.
+The `nexigon` feature, which is enabled by default, connects the weather station to Nexigon Hub. Every 30 seconds, the device publishes a heartbeat event and the measurement of the sensors. It runs commands that Nexigon Hub sends and installs updates that Nexigon Hub rolls out. A bootloader swaps in updates and rolls back those that fail. Without the feature, the firmware logs the measurements to the USB serial port.
 
 With the feature, the firmware holds one persistent connection to Nexigon Hub, which authenticates the device with a deployment token, a device fingerprint, and a client certificate. On its first connection, Nexigon Hub registers the device in the project of the deployment token.
 
@@ -10,6 +10,7 @@ With the feature, the firmware holds one persistent connection to Nexigon Hub, w
 
 - A Raspberry Pi Pico W.
 - A DHT11 sensor connected to GP0, for instance, the one on the Joy-IT explorer board (RB-P-XPLR). Turn on its switch on the board.
+- A Joy-IT SEN-UV01 UV sensor connected to GP26, the first analog input. Connect its VCC to 3V3 (OUT), GND to GND, and OUT to GP26. Power it from 3.3 V, the most that the analog inputs of the Pico W accept.
 - [Rust](https://rustup.rs). `rust-toolchain.toml` selects the toolchain and installs the `thumbv6m-none-eabi` target and `llvm-objcopy`.
 - `python3`, which creates the UF2 file.
 - Optionally, [`mise`](https://mise.jdx.dev) to run the tasks in `mise.toml`.
@@ -78,8 +79,8 @@ The firmware logs to a USB serial port, for instance, `/dev/ttyACM0` on Linux or
 
 ```text
 starting firmware 20261120-163751
-measured 21.0 °C, 45 % humidity
-measured 21.1 °C, 45 % humidity
+measured 21.0 °C, 45 % humidity, UV index 0.2 (0.021 V)
+measured 21.1 °C, 45 % humidity, UV index 0.2 (0.022 V)
 ```
 
 With Nexigon, it looks as follows:
@@ -94,7 +95,7 @@ signed handshake in ... ms
 connected in ... ms
 authenticated as device d_...
 published commands
-published heartbeat and 21.0 °C, 45 % humidity
+published heartbeat and 21.0 °C, 45 % humidity, UV index 0.2 (0.021 V)
 ```
 
 The events appear in the event log of the device in Nexigon Hub.
@@ -103,12 +104,14 @@ The events appear in the event log of the device in Nexigon Hub.
 
 With Nexigon, the device publishes two events every 30 seconds:
 
-| Category      | Body                                                          |
-| ------------- | ------------------------------------------------------------- |
-| `heartbeat`   | `{"uptimeSeconds": 42, "firmwareVersion": "20261120-163751"}` |
-| `environment` | `{"temperatureCelsius": 21.0, "humidityPercent": 45.0}`       |
+| Category      | Body                                                                                       |
+| ------------- | ------------------------------------------------------------------------------------------ |
+| `heartbeat`   | `{"uptimeSeconds": 42, "firmwareVersion": "20261120-163751"}`                              |
+| `environment` | `{"temperatureCelsius": 21.0, "humidityPercent": 45.0, "uvIndex": 0.21, "uvVolts": 0.021}` |
 
-The `environment` event carries the reading of the DHT11 sensor. If the sensor does not answer, for instance, because none is connected, the device logs a warning and publishes only the heartbeat. `src/dht11.rs` reads the sensor, and `src/nexigon/events.rs` publishes the events.
+The `environment` event carries the measurement of the sensors. `temperatureCelsius` and `humidityPercent` come from the DHT11, and `uvIndex` and `uvVolts` from the UV sensor. `uvVolts` is the output voltage of the UV sensor. `uvIndex` approximates the UV index as that voltage divided by 0.1 V, which suits sensors with the GUVA-S12SD photodiode but is not calibrated.
+
+If a sensor fails, the device logs a warning and leaves out its fields. If both fail, it publishes only the heartbeat. A DHT11 fails when it does not answer, for instance, because none is connected. A missing UV sensor goes unnoticed, because the open analog input yields arbitrary voltages. `src/sensors.rs` reads the sensors, and `src/nexigon/events.rs` publishes the events.
 
 ## Commands
 
@@ -152,16 +155,18 @@ update completed
 
 ## How It Works
 
-The core of the firmware reads the sensor and keeps the device running. Everything that concerns Nexigon is in `src/nexigon/`, which only the `nexigon` feature compiles, together with its dependencies. Its entry point is `nexigon::run`, which takes the peripherals it needs and the sensor. Without the feature, `src/standalone.rs` logs the readings instead. Both variants use the same bootloader and flash layout, so a device can switch between them when flashed over USB.
+The core of the firmware reads the sensors and keeps the device running. Everything that concerns Nexigon is in `src/nexigon/`, which only the `nexigon` feature compiles, together with its dependencies. Its entry point is `nexigon::run`, which takes the peripherals it needs and the sensors. Without the feature, `src/standalone.rs` logs the measurements instead. Both variants use the same bootloader and flash layout, so a device can switch between them when flashed over USB.
 
-| File                | Purpose                                                    |
-| ------------------- | ---------------------------------------------------------- |
-| `src/main.rs`       | Start of the firmware, which hands the sensor to a variant |
-| `src/dht11.rs`      | Readings of the DHT11 sensor                               |
-| `src/watchdog.rs`   | Watchdog, which resets the device when it hangs            |
-| `src/standalone.rs` | Logging of readings without Nexigon                        |
-| `src/nexigon/`      | Connection to Nexigon Hub, with the `nexigon` feature      |
-| `bootloader/`       | Bootloader that swaps in updates and rolls them back       |
+| File                | Purpose                                                     |
+| ------------------- | ----------------------------------------------------------- |
+| `src/main.rs`       | Start of the firmware, which hands the sensors to a variant |
+| `src/sensors.rs`    | Measurements of all sensors                                 |
+| `src/dht11.rs`      | Readings of the DHT11 sensor                                |
+| `src/uv.rs`         | Readings of the UV sensor                                   |
+| `src/watchdog.rs`   | Watchdog, which resets the device when it hangs             |
+| `src/standalone.rs` | Logging of measurements without Nexigon                     |
+| `src/nexigon/`      | Connection to Nexigon Hub, with the `nexigon` feature       |
+| `bootloader/`       | Bootloader that swaps in updates and rolls them back        |
 
 ### Connection to Nexigon Hub
 

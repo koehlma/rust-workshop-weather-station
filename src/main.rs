@@ -1,11 +1,11 @@
-//! Firmware of a weather station built from a Raspberry Pi Pico W and a DHT11
-//! sensor.
+//! Firmware of a weather station built from a Raspberry Pi Pico W, a DHT11
+//! sensor, and a SEN-UV01 UV sensor.
 //!
-//! The firmware reads the temperature and humidity every 30 seconds. With the
-//! `nexigon` feature, [`nexigon`] connects the device to Nexigon Hub, which
-//! receives the readings as events, runs commands, and rolls out updates.
-//! Without it, [`standalone`] logs the readings. Logs go to the USB serial
-//! port.
+//! Every 30 seconds, the firmware measures the temperature, humidity, and UV
+//! radiation with [`sensors`]. With the `nexigon` feature, [`nexigon`]
+//! connects the device to Nexigon Hub, which receives the measurements as
+//! events, runs commands, and rolls out updates. Without it, [`standalone`]
+//! logs the measurements. Logs go to the USB serial port.
 
 #![no_std]
 #![no_main]
@@ -13,8 +13,10 @@
 mod dht11;
 #[cfg(feature = "nexigon")]
 mod nexigon;
+mod sensors;
 #[cfg(not(feature = "nexigon"))]
 mod standalone;
+mod uv;
 mod watchdog;
 
 use embassy_executor::Spawner;
@@ -27,6 +29,8 @@ use log::info;
 use panic_reset as _;
 
 use crate::dht11::Dht11;
+use crate::sensors::Sensors;
+use crate::uv::UvSensor;
 
 /// Version of the firmware, by default the time of the build, for instance,
 /// `20261120-163000`.
@@ -47,8 +51,12 @@ async fn main(spawner: Spawner) {
     Timer::after_secs(3).await;
     info!("starting firmware {FIRMWARE_VERSION}");
 
-    // The Joy-IT explorer board connects its DHT11 sensor to GP0.
-    let sensor = Dht11::new(p.PIN_0);
+    let sensors = Sensors::new(
+        // The Joy-IT explorer board connects its DHT11 sensor to GP0.
+        Dht11::new(p.PIN_0),
+        // GP26 is the first analog input, which the explorer board leaves free.
+        UvSensor::new(p.ADC, p.PIN_26),
+    );
 
     #[cfg(feature = "nexigon")]
     nexigon::run(
@@ -62,12 +70,12 @@ async fn main(spawner: Spawner) {
             wifi_pio: p.PIO0,
             wifi_dma: p.DMA_CH0,
         },
-        sensor,
+        sensors,
     )
     .await;
 
     #[cfg(not(feature = "nexigon"))]
-    standalone::run(sensor).await;
+    standalone::run(sensors).await;
 }
 
 #[embassy_executor::task]

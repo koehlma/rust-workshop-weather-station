@@ -1,24 +1,24 @@
 //! Operation without Nexigon, when the `nexigon` feature is disabled.
 //!
-//! [`run`] logs a reading of the sensor every [`READING_INTERVAL`].
+//! [`run`] logs a measurement of the sensors every [`MEASUREMENT_INTERVAL`].
 
 use embassy_time::Duration;
 use embassy_time::Timer;
 use log::info;
-use log::warn;
 
-use crate::dht11::Dht11;
+use crate::sensors::Sensors;
 
-/// Interval between readings of the sensor.
-const READING_INTERVAL: Duration = Duration::from_secs(30);
+/// Interval between measurements.
+const MEASUREMENT_INTERVAL: Duration = Duration::from_secs(30);
 
-/// Logs a reading of the sensor every [`READING_INTERVAL`].
-pub async fn run(mut sensor: Dht11<'static>) -> ! {
+/// Logs a measurement of the sensors every [`MEASUREMENT_INTERVAL`].
+pub async fn run(mut sensors: Sensors) -> ! {
     loop {
-        match sensor.read().await {
-            Ok(reading) => info!("measured {reading}"),
-            Err(error) => warn!("failed to read the DHT11 sensor: {error}"),
+        let measurement = sensors.measure().await;
+        // Sensors that fail are logged as they are measured.
+        if !measurement.is_empty() {
+            info!("measured {measurement}");
         }
-        Timer::after(READING_INTERVAL).await;
+        Timer::after(MEASUREMENT_INTERVAL).await;
     }
 }
