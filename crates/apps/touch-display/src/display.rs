@@ -2,12 +2,12 @@
 //!
 //! The display is an ST7789 with 240 × 320 pixels on the shared [`Bus`].
 //! [`Display::new`] starts it in landscape, mirrored horizontally with rows
-//! and columns swapped, as in the example code of Waveshare. The panel shows
-//! correct colors in BGR order with color inversion, as in Waveshare's
-//! configuration of `TFT_eSPI` for the board. [`Display::paint`] paints a frame, such as the
-//! dashboard of [`screen`](crate::screen) or the [`scene`](crate::scene), strip
-//! by strip and sends each [`Strip`] in one transfer, so that the screen never
-//! shows a partially drawn strip. It yields after every strip, so that other
+//! and columns swapped, as in the example code of Waveshare. The panel is an
+//! IPS panel, which shows correct colors only with color inversion, in RGB
+//! order. [`Display::paint`] paints a frame, such as the dashboard of
+//! [`screen`](crate::screen) or the [`scene`](crate::scene), strip by strip
+//! and sends each [`Strip`] in one transfer, so that the screen never shows a
+//! partially drawn strip. It yields after every strip, so that other
 //! tasks, such as the touch screen and the network, keep running.
 
 use embassy_embedded_hal::shared_bus::blocking::spi::SpiDeviceWithConfig;
@@ -86,7 +86,7 @@ impl Display {
         let mut display = Builder::new(ST7789, interface)
             .display_size(240, 320)
             .orientation(Orientation::new().rotate(Rotation::Deg90))
-            .color_order(ColorOrder::Bgr)
+            .color_order(ColorOrder::Rgb)
             .invert_colors(ColorInversion::Inverted)
             .reset_pin(Output::new(pins.reset, Level::High))
             .init(&mut Delay)
