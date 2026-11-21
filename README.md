@@ -9,6 +9,10 @@ Firmware for two devices built on the Raspberry Pi Pico W (RP2040). It is writte
 
 Both devices connect to Nexigon Hub, each with its own identity. Every 30 seconds, the weather station measures and sends the measurement directly to the touch display over the local network. Every 30 seconds, a device publishes a heartbeat event, the weather station its latest measurement, and the touch display the number of stored measurements. Device properties in Nexigon Hub configure the IP addresses of the devices. The devices run commands that Nexigon Hub sends and install updates that Nexigon Hub rolls out. A bootloader swaps in updates and rolls back those that fail. The weather station can also be built without Nexigon, in which case it logs its measurements to the USB serial port.
 
+![Screens of the touch display with mock data: plots of the temperature over 24 hours, the humidity over 1 hour, the UV index over 7 days, and the air pressure over 30 days, and the weather scene for sunny, cloudy, rainy, and snowy weather](docs/touch-display.png)
+
+The screens of the touch display with mock data: plots of the stored measurements and the animated weather scene.
+
 Each device holds one persistent connection to Nexigon Hub, which authenticates it with a deployment token, a device fingerprint, and a client certificate. On its first connection, Nexigon Hub registers the device in the project of the deployment token.
 
 ## Requirements
