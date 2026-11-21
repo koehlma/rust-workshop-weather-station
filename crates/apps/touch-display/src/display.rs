@@ -3,12 +3,14 @@
 //! The display is an ST7789 with 240 × 320 pixels on the shared [`Bus`].
 //! [`Display::new`] starts it in landscape, as in the example code of
 //! Waveshare: RGB, without color inversion, and mirrored horizontally with
-//! rows and columns swapped. [`Display::show`] draws a frame, such as the
+//! rows and columns swapped. [`Display::paint`] paints a frame, such as the
 //! dashboard of [`screen`](crate::screen) or the [`scene`](crate::scene), strip
 //! by strip and sends each [`Strip`] in one transfer, so that the screen never
-//! shows a partially drawn frame.
+//! shows a partially drawn strip. It yields after every strip, so that other
+//! tasks, such as the touch screen and the network, keep running.
 
 use embassy_embedded_hal::shared_bus::blocking::spi::SpiDeviceWithConfig;
+use embassy_futures::yield_now;
 use embassy_rp::Peri;
 use embassy_rp::gpio::Level;
 use embassy_rp::gpio::Output;
@@ -99,15 +101,17 @@ impl Display {
         }
     }
 
-    /// Draws `drawable`, replacing what the display showed before.
-    pub fn show(&mut self, drawable: &impl Drawable<Color = Rgb565, Output = ()>) {
+    /// Paints a frame with `paint`, which paints each strip, replacing what
+    /// the display showed before.
+    pub async fn paint(&mut self, mut paint: impl FnMut(&mut Strip)) {
         for top in (0..SCREEN_HEIGHT).step_by(STRIP_HEIGHT as usize) {
             self.strip.move_to(top as i32);
-            let Ok(()) = drawable.draw(self.strip);
+            paint(self.strip);
             let area = self.strip.bounding_box();
             self.display
                 .fill_contiguous(&area, self.strip.pixels().iter().copied())
                 .expect("the SPI bus and the pins of the display do not fail");
+            yield_now().await;
         }
     }
 }

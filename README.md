@@ -196,18 +196,18 @@ The display draws each frame in strips of 24 rows in memory and sends each strip
 
 ### Weather Scene
 
-The weather scene animates the latest measurement. The weather station measures neither clouds nor rain, so the scene maps what it measures to a picture:
+The weather scene animates the latest measurement as a landscape of rolling hills under a sky. The weather station measures neither clouds nor rain, so the scene maps what it measures to a picture:
 
-| Element      | Shows                                                                                                                              |
-| ------------ | ---------------------------------------------------------------------------------------------------------------------------------- |
-| Sun          | A UV index of at least 1, with longer rays and a bluer sky the higher the UV index                                                 |
-| Clouds       | The humidity: more clouds the higher it is, and dark clouds from 85 %                                                              |
-| Rain or snow | A humidity of at least 90 % while the air pressure falls, the classic barometric sign of worsening weather. Snow at or below 1 °C. |
-| Sky          | The temperature: icy at or below 0 °C and warm from 25 °C                                                                          |
+| Element       | Shows                                                                                                                              |
+| ------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| Sun           | A UV index of at least 1, with a brighter glow and a bluer sky the higher the UV index                                             |
+| Clouds        | The humidity: more clouds the higher it is, and dark clouds from 85 %                                                              |
+| Rain or snow  | A humidity of at least 90 % while the air pressure falls, the classic barometric sign of worsening weather. Snow at or below 1 °C. |
+| Sky and hills | The temperature: an icy sky and snowy hills at or below 0 °C, and a warm sky from 25 °C                                            |
 
 The headline shows the temperature and a description, for instance, "Mild, humid" or "Rain likely". The bar below shows the humidity, the UV index, and the air pressure with its trend: rising or falling by at least 1 hPa over the last two to three hours, or steady. The trend appears once the touch display has two hours of measurements, which it reads from the card after a start.
 
-The scene shows at up to 10 frames per second. Positions follow from the time since the scene appeared, so the animation runs at the same speed at any frame rate. The sky is dithered, because the display has only 5 bits for red and blue.
+The scene shows at up to 10 frames per second. It shades every pixel with 8 bits per channel and dithers it to the 16-bit colors of the display, so that the gradients of the sky, the glow of the sun, and the soft edges of the clouds stay smooth. Positions follow from the time since the scene appeared, so the animation runs at the same speed at any frame rate. The display draws a frame strip by strip and lets other work run in between, so that taps and the network are handled while the scene is animated.
 
 ### Storage Format
 

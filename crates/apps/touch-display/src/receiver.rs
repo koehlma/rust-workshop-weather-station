@@ -38,6 +38,7 @@ use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_time::Duration;
 use embassy_time::Instant;
 use embassy_time::Timer;
+use embedded_graphics::Drawable;
 use heapless::Deque;
 use heapless::String;
 use log::info;
@@ -65,7 +66,7 @@ use crate::screen::Status;
 use crate::screen::Target;
 use crate::storage::DAY_SECONDS;
 use crate::storage::Storage;
-use crate::touch::Touch;
+use crate::touch;
 use crate::weather::PressureTrend;
 use crate::weather::TREND_SECONDS;
 use crate::weather::Weather;
@@ -139,12 +140,7 @@ pub fn set_sensor_address(address: Option<Ipv4Addr>) {
 
 /// Receives measurements, stores them, and shows them.
 #[embassy_executor::task]
-pub async fn task(
-    stack: Stack<'static>,
-    mut display: Display,
-    mut touch: Touch,
-    mut storage: Storage,
-) -> ! {
+pub async fn task(stack: Stack<'static>, mut display: Display, mut storage: Storage) -> ! {
     let mut rx_meta = [PacketMetadata::EMPTY; 4];
     let mut rx_buffer = [0; 1024];
     let mut tx_meta = [PacketMetadata::EMPTY; 1];
@@ -176,10 +172,10 @@ pub async fn task(
         receiver.load(&mut storage, &mut display).await;
         let mut deadline = next_page;
         match receiver.page {
-            Page::Plot(_) => receiver.show(&mut display, &storage, false),
+            Page::Plot(_) => receiver.show(&mut display, &storage, false).await,
             Page::Scene => {
                 let started = Instant::now();
-                receiver.show_scene(&mut display);
+                receiver.show_scene(&mut display).await;
                 let drawn = Instant::now();
                 // Log the first frame of every showing.
                 if started - receiver.scene_started < FRAME_INTERVAL {
@@ -197,7 +193,7 @@ pub async fn task(
         let event = select3(
             socket.recv_from(&mut datagram),
             Timer::at(deadline),
-            touch.tap(),
+            touch::TAPS.receive(),
         )
         .await;
         match event {
@@ -418,7 +414,7 @@ impl Receiver {
         let Some(now) = nexigon::unix_seconds() else {
             return;
         };
-        self.show(display, storage, true);
+        self.show(display, storage, true).await;
         let now = now as u32;
         let history_start = now.saturating_sub(self.history.interval().seconds());
         let trend_start = now.saturating_sub(TREND_SECONDS);
@@ -449,7 +445,7 @@ impl Receiver {
 
     /// Shows the latest measurements, the plot, and the state of the device,
     /// which is reading the history if `loading` is set.
-    fn show(&self, display: &mut Display, storage: &Storage, loading: bool) {
+    async fn show(&self, display: &mut Display, storage: &Storage, loading: bool) {
         let now = nexigon::unix_seconds();
         let columns = match now {
             Some(now) if self.loaded => self.history.columns(self.metric(), now as u32),
@@ -483,11 +479,16 @@ impl Receiver {
             status_text: &status_text,
             firmware_version: crate::CONFIG.firmware_version,
         };
-        display.show(&Frame::new(&screen));
+        let frame = Frame::new(&screen);
+        display
+            .paint(|strip| {
+                let Ok(()) = frame.draw(strip);
+            })
+            .await;
     }
 
     /// Shows the current frame of the scene.
-    fn show_scene(&self, display: &mut Display) {
+    async fn show_scene(&self, display: &mut Display) {
         let latest = self.latest.map(|(_, measurement)| measurement);
         let value = |metric| latest.and_then(|measurement| measurement.value(metric));
         let weather = Weather {
@@ -498,7 +499,8 @@ impl Receiver {
             trend: nexigon::unix_seconds().and_then(|now| self.trend.trend(now as u32)),
         };
         let time = self.scene_started.elapsed().as_millis() as u32;
-        display.show(&Scene::new(weather, self.is_stale(), time));
+        let scene = Scene::new(weather, self.is_stale(), time);
+        display.paint(|strip| scene.paint(strip)).await;
     }
 
     /// Indicates whether the latest measurement is missing or outdated.

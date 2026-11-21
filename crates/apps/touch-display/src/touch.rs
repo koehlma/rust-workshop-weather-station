@@ -4,7 +4,8 @@
 //! on GP16. It pulls its interrupt line on GP17 low while the screen is
 //! touched. [`Touch::tap`] waits for a touch and measures its position. The
 //! controller powers down between measurements with its interrupt line
-//! enabled.
+//! enabled. [`task`] measures taps in a task of their own and sends them to
+//! [`TAPS`], so that no tap gets lost while the display draws.
 //!
 //! The calibration is the one of Waveshare's example code for the orientation
 //! of the display, `U2D_R2L`. Its accuracy varies between panels, so the
@@ -16,9 +17,12 @@ use embassy_rp::gpio::Output;
 use embassy_rp::gpio::Pull;
 use embassy_rp::peripherals::PIN_17;
 use embassy_rp::spi;
+use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
+use embassy_sync::channel::Channel;
 use embassy_time::Duration;
 use embassy_time::Timer;
 use embedded_graphics::prelude::Point;
+use log::warn;
 
 use crate::Bus;
 use crate::strip::SCREEN_HEIGHT;
@@ -41,7 +45,21 @@ const SAMPLES: usize = 5;
 const PLAUSIBLE: core::ops::RangeInclusive<u16> = 100..=4000;
 
 /// Time for which a touch must last to count as a tap.
-const DEBOUNCE: Duration = Duration::from_millis(30);
+const DEBOUNCE: Duration = Duration::from_millis(15);
+
+/// Positions of taps that wait to be handled.
+pub static TAPS: Channel<CriticalSectionRawMutex, Point, 4> = Channel::new();
+
+/// Measures taps on `touch` and sends their positions to [`TAPS`].
+#[embassy_executor::task]
+pub async fn task(mut touch: Touch) -> ! {
+    loop {
+        let point = touch.tap().await;
+        if TAPS.try_send(point).is_err() {
+            warn!("dropped a tap, because earlier taps wait to be handled");
+        }
+    }
+}
 
 /// Touch screen of the board.
 pub struct Touch {

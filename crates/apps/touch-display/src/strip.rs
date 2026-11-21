@@ -42,9 +42,26 @@ impl Strip {
         self.top = top;
     }
 
+    /// Returns the first row of the strip.
+    pub fn top(&self) -> i32 {
+        self.top
+    }
+
     /// Returns the pixels of the strip, row by row.
     pub fn pixels(&self) -> &[Rgb565] {
         &self.pixels
+    }
+
+    /// Returns the pixels of the `row`-th row of the strip.
+    pub fn row_mut(&mut self, row: usize) -> &mut [Rgb565] {
+        let start = row * SCREEN_WIDTH as usize;
+        &mut self.pixels[start..start + SCREEN_WIDTH as usize]
+    }
+
+    /// Returns the pixel at `point`, if the strip holds it.
+    pub fn pixel_mut(&mut self, point: Point) -> Option<&mut Rgb565> {
+        let index = self.index(point)?;
+        Some(&mut self.pixels[index])
     }
 
     /// Returns the index of `point` in the pixels, if the strip holds it.

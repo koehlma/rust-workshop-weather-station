@@ -117,6 +117,7 @@ async fn main(spawner: Spawner) {
         },
     );
     let touch = Touch::new(bus, touch_chip_select, p.PIN_17);
+    spawner.spawn(touch::task(touch).unwrap());
     let storage = Storage::new(bus, sd_chip_select);
 
     nexigon::run(
@@ -134,7 +135,7 @@ async fn main(spawner: Spawner) {
             },
         },
         TouchDisplay {
-            parts: Some((display, touch, storage)),
+            parts: Some((display, storage)),
         },
     )
     .await
@@ -142,9 +143,8 @@ async fn main(spawner: Spawner) {
 
 /// Application of the device.
 struct TouchDisplay {
-    /// Display, touch screen, and storage, until [`receiver::task`] takes
-    /// them.
-    parts: Option<(Display, Touch, Storage)>,
+    /// Display and storage, until [`receiver::task`] takes them.
+    parts: Option<(Display, Storage)>,
 }
 
 impl Application for TouchDisplay {
@@ -155,8 +155,8 @@ impl Application for TouchDisplay {
     const CONFIG_PROPERTY: Option<&'static str> = Some("touch-display.config");
 
     fn start(&mut self, spawner: Spawner, stack: Stack<'static>) {
-        let (display, touch, storage) = self.parts.take().expect("the application starts once");
-        spawner.spawn(receiver::task(stack, display, touch, storage).unwrap());
+        let (display, storage) = self.parts.take().expect("the application starts once");
+        spawner.spawn(receiver::task(stack, display, storage).unwrap());
     }
 
     fn configure(&mut self, config: Option<Json<'_>>) {
