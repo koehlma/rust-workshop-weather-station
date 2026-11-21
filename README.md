@@ -249,7 +249,7 @@ With every heartbeat, the touch display publishes a `storage` event with counts 
 
 ### Pins
 
-The display runs in landscape, as in the example code of Waveshare. The XPT2046 touch controller signals touches on its interrupt line, and the firmware then measures their position. It uses the calibration of Waveshare's example code for this orientation. Calibrations vary between panels, so the targets on the screen are large and the log records the position and target of every tap.
+The display runs in landscape, as in the example code of Waveshare, with its colors in BGR order and inverted, as in Waveshare's configuration of `TFT_eSPI` for the board. The XPT2046 touch controller signals touches on its interrupt line, and the firmware then measures their position. It uses the calibration of Waveshare's example code for this orientation. Calibrations vary between panels, so the targets on the screen are large and the log records the position and target of every tap.
 
 | Signal                  | GPIO |
 | ----------------------- | ---- |

@@ -1,9 +1,10 @@
 //! Display of the Waveshare Pico-ResTouch-LCD-2.8.
 //!
 //! The display is an ST7789 with 240 × 320 pixels on the shared [`Bus`].
-//! [`Display::new`] starts it in landscape, as in the example code of
-//! Waveshare: RGB, without color inversion, and mirrored horizontally with
-//! rows and columns swapped. [`Display::paint`] paints a frame, such as the
+//! [`Display::new`] starts it in landscape, mirrored horizontally with rows
+//! and columns swapped, as in the example code of Waveshare. The panel shows
+//! correct colors in BGR order with color inversion, as in Waveshare's
+//! configuration of `TFT_eSPI` for the board. [`Display::paint`] paints a frame, such as the
 //! dashboard of [`screen`](crate::screen) or the [`scene`](crate::scene), strip
 //! by strip and sends each [`Strip`] in one transfer, so that the screen never
 //! shows a partially drawn strip. It yields after every strip, so that other
@@ -85,8 +86,8 @@ impl Display {
         let mut display = Builder::new(ST7789, interface)
             .display_size(240, 320)
             .orientation(Orientation::new().rotate(Rotation::Deg90))
-            .color_order(ColorOrder::Rgb)
-            .invert_colors(ColorInversion::Normal)
+            .color_order(ColorOrder::Bgr)
+            .invert_colors(ColorInversion::Inverted)
             .reset_pin(Output::new(pins.reset, Level::High))
             .init(&mut Delay)
             .expect("the SPI bus and the pins of the display do not fail");
