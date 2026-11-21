@@ -197,7 +197,7 @@ The core of the firmware reads the sensors and keeps the device running. Everyth
 
 After joining the Wi-Fi network, the firmware synchronizes its clock with SNTP. Events carry the time they were emitted.
 
-The firmware then opens a TLS 1.3 connection to Nexigon Hub with [`embedded-tls`](https://github.com/drogue-iot/embedded-tls) and authenticates with its own certificate. The handshake is the most expensive step on the RP2040, which has no hardware acceleration for cryptography. The connection therefore stays open and is only reopened after a failure.
+The firmware then opens a TLS 1.3 connection to Nexigon Hub with [`embedded-tls`](https://github.com/drogue-iot/embedded-tls) and authenticates with its own certificate. The handshake is the most expensive step on the RP2040, which has no hardware acceleration for cryptography. The connection therefore stays open and is only reopened after a failure. Before reopening it, the firmware joins the Wi-Fi network again if it has lost its address, because the Wi-Fi chip does not rejoin on its own.
 
 Over TLS, the firmware opens a WebSocket connection to `/api/v1/connect/ws`. The multiplex protocol of Nexigon carries channels over it, with flow control for each channel:
 

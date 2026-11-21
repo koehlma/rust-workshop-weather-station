@@ -1,7 +1,8 @@
 //! Wi-Fi and the network stack through which the device reaches Nexigon Hub.
 //!
 //! [`start`] powers up the Wi-Fi chip of the Pico W, joins the network from
-//! [`config`], and waits for an address from DHCP.
+//! [`config`], and waits for an address from DHCP. The chip does not rejoin
+//! the network on its own after losing it, so [`ensure_up`] joins it again.
 
 use cyw43::JoinOptions;
 use cyw43::aligned_bytes;
@@ -26,6 +27,7 @@ use embassy_rp::pio;
 use embassy_rp::pio::Pio;
 use embassy_time::Duration;
 use embassy_time::Timer;
+use embassy_time::with_timeout;
 use log::info;
 use log::warn;
 use static_cell::StaticCell;
@@ -34,6 +36,9 @@ use super::config;
 
 /// Delay before joining the network again after a failure.
 const RETRY_DELAY: Duration = Duration::from_secs(10);
+
+/// Time within which DHCP must provide an address after joining the network.
+const DHCP_TIMEOUT: Duration = Duration::from_secs(30);
 
 bind_interrupts!(struct Irqs {
     PIO0_IRQ_0 => pio::InterruptHandler<PIO0>;
@@ -93,23 +98,44 @@ pub async fn start(
     );
     spawner.spawn(net_task(runner).unwrap());
 
-    info!("joining Wi-Fi network {}", config::WIFI_SSID);
-    while let Err(error) = control
-        .join(
-            config::WIFI_SSID,
-            JoinOptions::new(config::WIFI_PASSWORD.as_bytes()),
-        )
-        .await
-    {
-        warn!("failed to join Wi-Fi network: {error:?}");
+    join(stack, &mut control).await;
+    (stack, control)
+}
+
+/// Joins the network again if the device has lost its address, for instance,
+/// because the access point restarted.
+pub async fn ensure_up(stack: Stack<'static>, control: &mut cyw43::Control<'static>) {
+    if !stack.is_config_up() {
+        warn!("lost the Wi-Fi network");
+        control.leave().await;
+        join(stack, control).await;
+    }
+}
+
+/// Joins the network and waits for an address from DHCP, retrying until both
+/// succeed.
+async fn join(stack: Stack<'static>, control: &mut cyw43::Control<'static>) {
+    loop {
+        info!("joining Wi-Fi network {}", config::WIFI_SSID);
+        let options = JoinOptions::new(config::WIFI_PASSWORD.as_bytes());
+        match control.join(config::WIFI_SSID, options).await {
+            Ok(()) => match with_timeout(DHCP_TIMEOUT, stack.wait_config_up()).await {
+                Ok(()) => {
+                    info!(
+                        "network is up: {:?}",
+                        stack.config_v4().map(|config| config.address)
+                    );
+                    return;
+                }
+                Err(_) => {
+                    warn!("received no address from DHCP");
+                    control.leave().await;
+                }
+            },
+            Err(error) => warn!("failed to join Wi-Fi network: {error:?}"),
+        }
         Timer::after(RETRY_DELAY).await;
     }
-    stack.wait_config_up().await;
-    info!(
-        "network is up: {:?}",
-        stack.config_v4().map(|config| config.address)
-    );
-    (stack, control)
 }
 
 #[embassy_executor::task]

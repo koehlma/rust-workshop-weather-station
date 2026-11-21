@@ -109,8 +109,9 @@ pub async fn run(spawner: Spawner, peripherals: Peripherals, mut station: Statio
     let tls_buffers = TLS_BUFFERS.init(tls::Buffers::new());
     let download_buffers = DOWNLOAD_BUFFERS.init(tls::Buffers::new());
     let hub_buffers = HUB_BUFFERS.init(hub::Buffers::new());
-    let mut device = commands::Device::new(&mut control);
+    let mut device = commands::Device::new();
     loop {
+        network::ensure_up(stack, &mut control).await;
         while clock::unix_seconds().is_none() {
             match clock::sync(stack).await {
                 Ok(()) => info!("synchronized clock: {:?}", clock::now()),
@@ -140,6 +141,7 @@ pub async fn run(spawner: Spawner, peripherals: Peripherals, mut station: Statio
                 let served = serve(
                     &mut session,
                     &mut device,
+                    &mut control,
                     &mut firmware,
                     &mut station,
                     stack,
@@ -165,7 +167,8 @@ pub async fn run(spawner: Spawner, peripherals: Peripherals, mut station: Statio
 /// publishes events every [`EVENT_INTERVAL`], and runs commands in between.
 async fn serve(
     session: &mut hub::Session<'_, tls::Connection<'_>>,
-    device: &mut commands::Device<'_>,
+    device: &mut commands::Device,
+    control: &mut cyw43::Control<'static>,
     firmware: &mut Firmware,
     station: &mut Station,
     stack: Stack<'_>,
@@ -200,7 +203,7 @@ async fn serve(
             .wait_for_command(next_heartbeat.min(next_update_check))
             .await?
         {
-            commands::run(session, device).await?;
+            commands::run(session, device, control).await?;
             if device.take_update_check_request() {
                 next_update_check = Instant::now();
             }

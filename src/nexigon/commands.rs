@@ -53,18 +53,15 @@ const GET_STATUS_OUTPUT: &str = r#"{
 const CHECK_UPDATE_COMMAND: &str = "nexigon.ota.check";
 
 /// State of the device that commands act on.
-pub struct Device<'a> {
-    /// Wi-Fi chip, which controls the LED of the Pico W.
-    control: &'a mut cyw43::Control<'static>,
+pub struct Device {
     led: bool,
     update_check_requested: bool,
 }
 
-impl<'a> Device<'a> {
-    /// Takes control of the LED, which is off.
-    pub fn new(control: &'a mut cyw43::Control<'static>) -> Self {
+impl Device {
+    /// Creates the state of a device whose LED is off.
+    pub fn new() -> Self {
         Self {
-            control,
             led: false,
             update_check_requested: false,
         }
@@ -76,8 +73,9 @@ impl<'a> Device<'a> {
         core::mem::take(&mut self.update_check_requested)
     }
 
-    async fn set_led(&mut self, on: bool) {
-        self.control.gpio_set(0, on).await;
+    /// Turns the LED on or off through the Wi-Fi chip, which drives it.
+    async fn set_led(&mut self, control: &mut cyw43::Control<'static>, on: bool) {
+        control.gpio_set(0, on).await;
         self.led = on;
     }
 }
@@ -129,13 +127,14 @@ pub async fn publish_manifest<S: Read + Write + WaitReadable>(
 /// Runs the command that Nexigon Hub asked for and answers it.
 pub async fn run<S: Read + Write + WaitReadable>(
     session: &mut Session<'_, S>,
-    device: &mut Device<'_>,
+    device: &mut Device,
+    control: &mut cyw43::Control<'static>,
 ) -> Result<(), hub::Error> {
     let started = Instant::now();
     let result = match session.command() {
         Ok(invocation) => {
             info!("running command {}", invocation.command);
-            execute(&invocation, device).await
+            execute(&invocation, device, control).await
         }
         Err(error) => Err(error),
     };
@@ -162,7 +161,8 @@ pub async fn run<S: Read + Write + WaitReadable>(
 /// Executes a command, returning its output or an error message.
 async fn execute(
     invocation: &DeviceCommandInvokeData<'_>,
-    device: &mut Device<'_>,
+    device: &mut Device,
+    control: &mut cyw43::Control<'static>,
 ) -> Result<Option<Status>, &'static str> {
     match invocation.command.as_str() {
         Some("set-led") => {
@@ -170,7 +170,7 @@ async fn execute(
                 .input
                 .decode::<SetLedInput>()
                 .map_err(|_| "the input is invalid")?;
-            device.set_led(input.on).await;
+            device.set_led(control, input.on).await;
             Ok(None)
         }
         Some("get-status") => Ok(Some(Status {
