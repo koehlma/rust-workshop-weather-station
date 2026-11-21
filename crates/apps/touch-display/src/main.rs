@@ -4,9 +4,9 @@
 //! The [`receiver`] receives the measurements of the weather station over
 //! UDP and writes them to the microSD card through [`storage`] in the binary
 //! [`format`]. The [`display`] shows the latest measurement and a plot of the
-//! [`history`] in the layout of [`screen`]. A tap on the [`touch`] screen
-//! changes the interval of the plot. The display, the microSD slot, and the
-//! touch controller share SPI1.
+//! [`history`] in the layout of [`screen`], and an animated [`scene`] of the
+//! [`weather`]. Taps on the [`touch`] screen select what the display shows.
+//! The display, the microSD slot, and the touch controller share SPI1.
 //!
 //! The firmware connects the device to Nexigon Hub with its own identity in
 //! `identity/` through `pico_platform::nexigon`. It runs commands, installs
@@ -27,10 +27,13 @@ mod display;
 mod format;
 mod history;
 mod receiver;
+mod scene;
 mod screen;
 mod storage;
 mod strip;
+mod style;
 mod touch;
+mod weather;
 
 use core::cell::RefCell;
 use core::net::Ipv4Addr;

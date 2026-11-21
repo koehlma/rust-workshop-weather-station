@@ -2210,6 +2210,7 @@ dependencies = [
  "embedded-sdmmc",
  "heapless 0.8.0",
  "log",
+ "micromath",
  "mipidsi",
  "panic-reset",
  "pico-build",

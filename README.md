@@ -176,7 +176,7 @@ The screen has four parts, from top to bottom:
 - **Chips** of the intervals: 1 hour, 3 hours, 6 hours, 24 hours, 7 days, and 30 days. The selected interval is filled.
 - **State** of the device, with a colored dot, and the version of the firmware.
 
-The plot changes to the next quantity every 10 seconds and covers the last 24 hours after a start. A tap on a tile plots its quantity, a tap on the plot plots the next one, and a tap on a chip selects its interval. After a tap, the plot keeps its quantity for a minute.
+The display rotates through five pages: the plots of temperature, humidity, UV index, and air pressure for 10 seconds each, and then the [weather scene](#weather-scene) for 20 seconds. The plots cover the last 24 hours after a start. A tap on a tile plots its quantity, a tap on the plot shows the next page, and a tap on a chip selects its interval. A tap on the weather scene returns to the plots. After a tap, the page stays for a minute.
 
 | State                           | Dot   | Meaning                                                               |
 | ------------------------------- | ----- | --------------------------------------------------------------------- |
@@ -193,6 +193,21 @@ Each of the 288 columns of the plot summarizes the measurements of a bucket of t
 The touch display keeps the summaries of the interval in memory and adds every new measurement to them. When the interval changes, and after a restart once the clock is synchronized, it reads the measurements of the interval from the card.
 
 The display draws each frame in strips of 24 rows in memory and sends each strip in one transfer, so the screen never shows a partially drawn frame. The values use the [ProFont](https://github.com/wezm/profont) typeface.
+
+### Weather Scene
+
+The weather scene animates the latest measurement. The weather station measures neither clouds nor rain, so the scene maps what it measures to a picture:
+
+| Element      | Shows                                                                                                                              |
+| ------------ | ---------------------------------------------------------------------------------------------------------------------------------- |
+| Sun          | A UV index of at least 1, with longer rays and a bluer sky the higher the UV index                                                 |
+| Clouds       | The humidity: more clouds the higher it is, and dark clouds from 85 %                                                              |
+| Rain or snow | A humidity of at least 90 % while the air pressure falls, the classic barometric sign of worsening weather. Snow at or below 1 °C. |
+| Sky          | The temperature: icy at or below 0 °C and warm from 25 °C                                                                          |
+
+The headline shows the temperature and a description, for instance, "Mild, humid" or "Rain likely". The bar below shows the humidity, the UV index, and the air pressure with its trend: rising or falling by at least 1 hPa over the last two to three hours, or steady. The trend appears once the touch display has two hours of measurements, which it reads from the card after a start.
+
+The scene shows at up to 10 frames per second. Positions follow from the time since the scene appeared, so the animation runs at the same speed at any frame rate. The sky is dithered, because the display has only 5 bits for red and blue.
 
 ### Storage Format
 
@@ -325,6 +340,9 @@ The weather station enables the `nexigon` feature through its own feature of the
 | `format.rs`                              | Binary format of the files                                                         |
 | `display.rs`                             | Display                                                                            |
 | `strip.rs`                               | Strips of the screen in memory                                                     |
+| `style.rs`                               | Colors and text of the screens                                                     |
+| `scene.rs`                               | Animated weather scene                                                             |
+| `weather.rs`                             | Weather of the scene and trend of the air pressure                                 |
 | `screen.rs`                              | Layout of the screen and the plot                                                  |
 | `history.rs`                             | Summaries of the measurements of an interval for the plot                          |
 | `touch.rs`                               | Positions of taps on the touch screen                                              |

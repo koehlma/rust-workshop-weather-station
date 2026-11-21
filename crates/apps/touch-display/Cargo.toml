@@ -18,6 +18,7 @@ embedded-graphics.workspace = true
 embedded-sdmmc.workspace = true
 heapless.workspace = true
 log.workspace = true
+micromath.workspace = true
 mipidsi.workspace = true
 panic-reset.workspace = true
 pico-platform = { workspace = true, features = ["nexigon"] }

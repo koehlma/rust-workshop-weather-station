@@ -9,12 +9,13 @@
 //! sets, and rejects repeated sequence numbers. It adds every accepted
 //! measurement to the [`Storage`] and the [`History`].
 //!
-//! The [`Display`] shows the latest measurements, a plot of the history of
-//! one [`Metric`], and the state of the device. The plot shows the next
-//! metric every [`REFRESH_INTERVAL`]. A tap on a tile shows its metric, a tap
-//! on the plot shows the next metric, and a tap on a chip shows its
-//! [`Interval`], whose history the task then reads from the storage. After a
-//! tap, the metric stays for [`HOLD_AFTER_TAP`].
+//! The [`Display`] rotates through pages: the dashboard with a plot of the
+//! history of each [`Metric`] for [`PLOT_DURATION`], and then an animated
+//! [`Scene`] of the [`Weather`] for [`SCENE_DURATION`]. On the dashboard, a
+//! tap on a tile plots its metric, a tap on the plot shows the next page, and
+//! a tap on a chip plots its [`Interval`], whose history the task then reads
+//! from the storage. A tap on the scene returns to the dashboard. After a
+//! tap, the page stays for [`HOLD_AFTER_TAP`].
 //!
 //! A measurement without `measuredAt` gets the time of its reception. While
 //! the clock of the touch display is not synchronized either, up to
@@ -56,13 +57,18 @@ use crate::history::BUCKETS;
 use crate::history::History;
 use crate::history::Interval;
 use crate::history::Metric;
+use crate::scene::Scene;
 use crate::screen;
+use crate::screen::Frame;
 use crate::screen::Screen;
 use crate::screen::Status;
 use crate::screen::Target;
 use crate::storage::DAY_SECONDS;
 use crate::storage::Storage;
 use crate::touch::Touch;
+use crate::weather::PressureTrend;
+use crate::weather::TREND_SECONDS;
+use crate::weather::Weather;
 
 /// UDP port on which the display receives measurements.
 pub const PORT: u16 = 4242;
@@ -70,10 +76,21 @@ pub const PORT: u16 = 4242;
 /// Maximum number of measurements that wait for the clock.
 const UNTIMED_CAPACITY: usize = 16;
 
-/// Interval at which the screen shows the next metric and updates the state.
-const REFRESH_INTERVAL: Duration = Duration::from_secs(10);
+/// Time for which the dashboard plots a metric before the next page.
+const PLOT_DURATION: Duration = Duration::from_secs(10);
 
-/// Time for which the plot keeps its metric after a tap.
+/// Time for which the scene shows before the next page.
+const SCENE_DURATION: Duration = Duration::from_secs(20);
+
+/// Time between two frames of the scene, at most 10 frames per second.
+const FRAME_INTERVAL: Duration = Duration::from_millis(100);
+
+/// Shortest pause after a frame of the scene, which drawing blocks, so that
+/// the network and the watchdog keep running when frames take longer than
+/// [`FRAME_INTERVAL`].
+const FRAME_PAUSE: Duration = Duration::from_millis(20);
+
+/// Time for which a page stays after a tap.
 const HOLD_AFTER_TAP: Duration = Duration::from_secs(60);
 
 /// Age after which measurements count as outdated, four missed measurements.
@@ -148,17 +165,35 @@ pub async fn task(
         latest: None,
         rejected: None,
         history: History::new(Interval::Day),
+        trend: PressureTrend::new(),
         loaded: false,
-        metric: Metric::Temperature,
+        page: Page::Plot(Metric::Temperature),
+        scene_started: Instant::now(),
         hold_until: Instant::now(),
     };
-    let mut next_refresh = Instant::now() + REFRESH_INTERVAL;
+    let mut next_page = Instant::now() + receiver.page.duration();
     loop {
         receiver.load(&mut storage, &mut display).await;
-        receiver.show(&mut display, &storage, false);
-        let deadline = storage
-            .checkpoint_deadline()
-            .map_or(next_refresh, |checkpoint| checkpoint.min(next_refresh));
+        let mut deadline = next_page;
+        match receiver.page {
+            Page::Plot(_) => receiver.show(&mut display, &storage, false),
+            Page::Scene => {
+                let started = Instant::now();
+                receiver.show_scene(&mut display);
+                let drawn = Instant::now();
+                // Log the first frame of every showing.
+                if started - receiver.scene_started < FRAME_INTERVAL {
+                    info!(
+                        "drew a frame of the scene in {} ms",
+                        (drawn - started).as_millis()
+                    );
+                }
+                deadline = deadline.min((started + FRAME_INTERVAL).max(drawn + FRAME_PAUSE));
+            }
+        }
+        if let Some(checkpoint) = storage.checkpoint_deadline() {
+            deadline = deadline.min(checkpoint);
+        }
         let event = select3(
             socket.recv_from(&mut datagram),
             Timer::at(deadline),
@@ -184,11 +219,11 @@ pub async fn task(
                 {
                     storage.checkpoint();
                 }
-                if next_refresh <= now {
+                if next_page <= now {
                     if receiver.hold_until <= now {
-                        receiver.metric = receiver.metric.next();
+                        receiver.turn_to(receiver.page.next());
                     }
-                    next_refresh = now + REFRESH_INTERVAL;
+                    next_page = now + receiver.page.duration();
                 }
             }
             Either3::Third(point) => {
@@ -214,12 +249,45 @@ struct Receiver {
     rejected: Option<(Instant, IpAddress)>,
     /// Measurements of the interval that the plot shows.
     history: History,
-    /// Indicates whether the history holds the measurements of the storage.
+    /// Air pressure of the last hours.
+    trend: PressureTrend,
+    /// Indicates whether the history and the trend hold the measurements of
+    /// the storage.
     loaded: bool,
-    /// Metric that the plot shows.
-    metric: Metric,
-    /// Time until which the plot keeps its metric.
+    /// Page that the display shows.
+    page: Page,
+    /// Time at which the scene started to show.
+    scene_started: Instant,
+    /// Time until which the page stays.
     hold_until: Instant,
+}
+
+/// Page of the display.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Page {
+    /// Dashboard with a plot of a metric.
+    Plot(Metric),
+    /// Animated scene of the weather.
+    Scene,
+}
+
+impl Page {
+    /// Returns the page that follows this one.
+    fn next(self) -> Self {
+        match self {
+            Self::Plot(Metric::Pressure) => Self::Scene,
+            Self::Plot(metric) => Self::Plot(metric.next()),
+            Self::Scene => Self::Plot(Metric::Temperature),
+        }
+    }
+
+    /// Returns the time for which the page shows before the next one.
+    fn duration(self) -> Duration {
+        match self {
+            Self::Plot(_) => PLOT_DURATION,
+            Self::Scene => SCENE_DURATION,
+        }
+    }
 }
 
 impl Receiver {
@@ -294,27 +362,48 @@ impl Receiver {
         }
     }
 
-    /// Adds `record` to `storage` and, once loaded, to the history.
+    /// Adds `record` to `storage` and, once loaded, to the history and the
+    /// trend.
     fn store(&mut self, storage: &mut Storage, record: &Record) {
         storage.push(record);
         if self.loaded {
             self.history.add(record);
+            self.trend.add(record);
         }
     }
 
     /// Applies a tap on `target`.
     fn select(&mut self, target: Target) {
-        match target {
-            Target::Metric(metric) => self.metric = metric,
-            Target::Plot => self.metric = self.metric.next(),
-            Target::Interval(interval) => {
+        let page = match (self.page, target) {
+            (Page::Scene, _) => self.page.next(),
+            (Page::Plot(_), Target::Metric(metric)) => Page::Plot(metric),
+            (Page::Plot(_), Target::Plot) => self.page.next(),
+            (Page::Plot(_), Target::Interval(interval)) => {
                 if interval != self.history.interval() {
                     self.history.reset(interval);
                     self.loaded = false;
                 }
+                self.page
             }
-        }
+        };
+        self.turn_to(page);
         self.hold_until = Instant::now() + HOLD_AFTER_TAP;
+    }
+
+    /// Shows `page`.
+    fn turn_to(&mut self, page: Page) {
+        if page == Page::Scene && self.page != Page::Scene {
+            self.scene_started = Instant::now();
+        }
+        self.page = page;
+    }
+
+    /// Returns the metric that the dashboard plots.
+    fn metric(&self) -> Metric {
+        match self.page {
+            Page::Plot(metric) => metric,
+            Page::Scene => Metric::Temperature,
+        }
     }
 
     /// Reads the history from `storage`, once the clock is synchronized, if
@@ -331,13 +420,17 @@ impl Receiver {
         };
         self.show(display, storage, true);
         let now = now as u32;
-        let start = now.saturating_sub(self.history.interval().seconds());
+        let history_start = now.saturating_sub(self.history.interval().seconds());
+        let trend_start = now.saturating_sub(TREND_SECONDS);
         let started = Instant::now();
-        for day in start / DAY_SECONDS..=now / DAY_SECONDS {
-            let history = &mut self.history;
+        for day in history_start.min(trend_start) / DAY_SECONDS..=now / DAY_SECONDS {
+            let (history, trend) = (&mut self.history, &mut self.trend);
             let result = storage.read_day(day, |record| {
-                if record.time >= start {
+                if record.time >= history_start {
                     history.add(record);
+                }
+                if record.time >= trend_start {
+                    trend.add(record);
                 }
             });
             // The storage logs the error, and the screen shows it.
@@ -359,7 +452,7 @@ impl Receiver {
     fn show(&self, display: &mut Display, storage: &Storage, loading: bool) {
         let now = nexigon::unix_seconds();
         let columns = match now {
-            Some(now) if self.loaded => self.history.columns(self.metric, now as u32),
+            Some(now) if self.loaded => self.history.columns(self.metric(), now as u32),
             _ => [None; BUCKETS],
         };
         let notice = if loading {
@@ -375,12 +468,10 @@ impl Receiver {
             self.latest
                 .and_then(|(_, measurement)| measurement.value(metric))
         });
-        display.show(&Screen {
+        let screen = Screen {
             values,
-            stale: self
-                .latest
-                .is_none_or(|(received, _)| received.elapsed() > STALE_AFTER),
-            metric: self.metric,
+            stale: self.is_stale(),
+            metric: self.metric(),
             interval: self.history.interval(),
             columns: &columns,
             notice,
@@ -391,7 +482,29 @@ impl Receiver {
             status,
             status_text: &status_text,
             firmware_version: crate::CONFIG.firmware_version,
-        });
+        };
+        display.show(&Frame::new(&screen));
+    }
+
+    /// Shows the current frame of the scene.
+    fn show_scene(&self, display: &mut Display) {
+        let latest = self.latest.map(|(_, measurement)| measurement);
+        let value = |metric| latest.and_then(|measurement| measurement.value(metric));
+        let weather = Weather {
+            temperature_celsius: value(Metric::Temperature),
+            humidity_percent: value(Metric::Humidity),
+            uv_index: value(Metric::UvIndex),
+            pressure_hectopascals: value(Metric::Pressure),
+            trend: nexigon::unix_seconds().and_then(|now| self.trend.trend(now as u32)),
+        };
+        let time = self.scene_started.elapsed().as_millis() as u32;
+        display.show(&Scene::new(weather, self.is_stale(), time));
+    }
+
+    /// Indicates whether the latest measurement is missing or outdated.
+    fn is_stale(&self) -> bool {
+        self.latest
+            .is_none_or(|(received, _)| received.elapsed() > STALE_AFTER)
     }
 
     /// Describes the state of the device in `text` and returns its kind.

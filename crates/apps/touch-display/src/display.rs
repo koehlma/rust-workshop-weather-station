@@ -3,8 +3,9 @@
 //! The display is an ST7789 with 240 × 320 pixels on the shared [`Bus`].
 //! [`Display::new`] starts it in landscape, as in the example code of
 //! Waveshare: RGB, without color inversion, and mirrored horizontally with
-//! rows and columns swapped. [`Display::show`] draws a [`Screen`] strip by
-//! strip and sends each [`Strip`] in one transfer, so that the screen never
+//! rows and columns swapped. [`Display::show`] draws a frame, such as the
+//! dashboard of [`screen`](crate::screen) or the [`scene`](crate::scene), strip
+//! by strip and sends each [`Strip`] in one transfer, so that the screen never
 //! shows a partially drawn frame.
 
 use embassy_embedded_hal::shared_bus::blocking::spi::SpiDeviceWithConfig;
@@ -32,8 +33,6 @@ use mipidsi::options::Rotation;
 use static_cell::StaticCell;
 
 use crate::Bus;
-use crate::screen::Frame;
-use crate::screen::Screen;
 use crate::strip::SCREEN_HEIGHT;
 use crate::strip::STRIP_HEIGHT;
 use crate::strip::Strip;
@@ -100,12 +99,11 @@ impl Display {
         }
     }
 
-    /// Draws `screen`, replacing what the display showed before.
-    pub fn show(&mut self, screen: &Screen) {
-        let frame = Frame::new(screen);
+    /// Draws `drawable`, replacing what the display showed before.
+    pub fn show(&mut self, drawable: &impl Drawable<Color = Rgb565, Output = ()>) {
         for top in (0..SCREEN_HEIGHT).step_by(STRIP_HEIGHT as usize) {
             self.strip.move_to(top as i32);
-            let Ok(()) = frame.draw(self.strip);
+            let Ok(()) = drawable.draw(self.strip);
             let area = self.strip.bounding_box();
             self.display
                 .fill_contiguous(&area, self.strip.pixels().iter().copied())
