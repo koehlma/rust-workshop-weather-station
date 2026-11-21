@@ -1,9 +1,9 @@
 //! Firmware of a weather station built from a Raspberry Pi Pico W on a Joy-IT
-//! explorer board, with its DHT11 sensor and display, and a SEN-UV01 UV
-//! sensor.
+//! explorer board, with its DHT11 sensor and display, a SEN-UV01 UV sensor,
+//! and a BMP280 pressure sensor.
 //!
-//! Every 30 seconds, the [`station`] measures the temperature, humidity, and
-//! UV radiation and shows them on the display. With the `nexigon` feature,
+//! Every 30 seconds, the [`station`] measures the temperature, humidity, UV
+//! radiation, and air pressure and shows them on the display. With the `nexigon` feature,
 //! [`nexigon`] connects the device to Nexigon Hub, which receives the
 //! measurements as events, runs commands, and rolls out updates. Without it,
 //! [`standalone`] logs the measurements. Logs go to the USB serial port.
@@ -11,6 +11,7 @@
 #![no_std]
 #![no_main]
 
+mod bmp280;
 mod dht11;
 mod display;
 #[cfg(feature = "nexigon")]
@@ -24,6 +25,8 @@ mod watchdog;
 
 use embassy_executor::Spawner;
 use embassy_rp::bind_interrupts;
+use embassy_rp::i2c;
+use embassy_rp::i2c::I2c;
 use embassy_rp::peripherals::USB;
 use embassy_rp::usb;
 use embassy_rp::watchdog::Watchdog;
@@ -31,6 +34,7 @@ use embassy_time::Timer;
 use log::info;
 use panic_reset as _;
 
+use crate::bmp280::Bmp280;
 use crate::dht11::Dht11;
 use crate::display::Display;
 use crate::sensors::Sensors;
@@ -61,6 +65,13 @@ async fn main(spawner: Spawner) {
         Dht11::new(p.PIN_0),
         // GP26 is the first analog input, which the explorer board leaves free.
         UvSensor::new(p.ADC, p.PIN_26),
+        // GP4 and GP5 are SDA and SCL of the I2C connector of the explorer board.
+        Bmp280::new(I2c::new_blocking(
+            p.I2C0,
+            p.PIN_5,
+            p.PIN_4,
+            i2c::Config::default(),
+        )),
     );
     // The pins of the display on the explorer board.
     let display = Display::new(

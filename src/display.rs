@@ -1,7 +1,8 @@
 //! Display of the measurements on the 1.8" TFT of the Joy-IT explorer board.
 //!
 //! The TFT is an ST7735 with 128 × 160 pixels on SPI0. [`Display::show`]
-//! draws the temperature, humidity, and UV index of a measurement, with dashes
+//! draws the temperature, humidity, UV index, and air pressure of a
+//! measurement, with dashes
 //! for sensors that failed. The configuration follows the example code of
 //! Joy-IT: 8 MHz, mirrored on both axes, and addressed from (0, 0).
 
@@ -50,10 +51,10 @@ const SPI_FREQUENCY: u32 = 8_000_000;
 const MARGIN: i32 = 4;
 
 /// Labels of the values, from top to bottom.
-const LABELS: [&str; 3] = ["Temperature", "Humidity", "UV index"];
+const LABELS: [&str; 4] = ["Temperature", "Humidity", "UV index", "Air pressure"];
 
 /// Height of a label and its value.
-const ROW_HEIGHT: i32 = 52;
+const ROW_HEIGHT: i32 = 39;
 
 /// Distance of a value below its label.
 const VALUE_OFFSET: i32 = 12;
@@ -140,6 +141,10 @@ impl Display {
         match &measurement.uv {
             Some(reading) => self.draw_value(2, format_args!("{:.1}", reading.uv_index)),
             None => self.draw_value(2, format_args!("--")),
+        }
+        match &measurement.bmp280 {
+            Some(reading) => self.draw_value(3, format_args!("{reading}")),
+            None => self.draw_value(3, format_args!("--")),
         }
     }
 

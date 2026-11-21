@@ -1,6 +1,6 @@
 # Weather Station on the Raspberry Pi Pico W
 
-Firmware for a weather station built from a Raspberry Pi Pico W (RP2040) on a Joy-IT explorer board and a SEN-UV01 UV sensor. Every 30 seconds, it measures the temperature, humidity, and UV radiation and shows them on the display of the board. It is written in Rust with [Embassy](https://embassy.dev) and runs without an operating system or an allocator.
+Firmware for a weather station built from a Raspberry Pi Pico W (RP2040) on a Joy-IT explorer board, a SEN-UV01 UV sensor, and a BMP280 pressure sensor. Every 30 seconds, it measures the temperature, humidity, UV radiation, and air pressure and shows them on the display of the board. It is written in Rust with [Embassy](https://embassy.dev) and runs without an operating system or an allocator.
 
 The `nexigon` feature, which is enabled by default, connects the weather station to Nexigon Hub. Every 30 seconds, the device publishes a heartbeat event and the measurement of the sensors. It runs commands that Nexigon Hub sends and installs updates that Nexigon Hub rolls out. A bootloader swaps in updates and rolls back those that fail. Without the feature, the firmware logs the measurements to the USB serial port.
 
@@ -10,6 +10,7 @@ With the feature, the firmware holds one persistent connection to Nexigon Hub, w
 
 - A Raspberry Pi Pico W on a Joy-IT explorer board (RB-P-XPLR). The firmware uses its DHT11 sensor on GP0 and its 1.8" display, an ST7735 on SPI0. Turn on their switches on the board.
 - A Joy-IT SEN-UV01 UV sensor connected to GP26, the first analog input. Connect its VCC to 3V3 (OUT), GND to GND, and OUT to GP26. Power it from 3.3 V, the most that the analog inputs of the Pico W accept.
+- A BMP280 pressure sensor, for instance, the Joy-IT KY-052, connected to I2C0. Connect its +V to 3V3 (OUT), GND to GND, SDA to GP4, and SCL to GP5. Tie CSB to 3V3, which selects I2C, and SDO to 3V3, which selects the address 0x77.
 - [Rust](https://rustup.rs). `rust-toolchain.toml` selects the toolchain and installs the `thumbv6m-none-eabi` target and `llvm-objcopy`.
 - `python3`, which creates the UF2 file.
 - Optionally, [`mise`](https://mise.jdx.dev) to run the tasks in `mise.toml`.
@@ -74,14 +75,14 @@ The version of the firmware is the time of the build, for instance, `20261120-16
 
 To flash the bootloader and the firmware, hold the BOOTSEL button while connecting the Pico W over USB. It appears as a drive named `RPI-RP2`. Copy `target/nexigon-mcu-rp-example.uf2` to the drive. The Pico W restarts with the new firmware. With Nexigon, the device afterward receives new versions through Nexigon Hub.
 
-The display shows the latest temperature, humidity, and UV index, with dashes for a sensor that failed.
+The display shows the latest temperature, humidity, UV index, and air pressure, with dashes for a sensor that failed.
 
 The firmware logs to a USB serial port, for instance, `/dev/ttyACM0` on Linux or `/dev/cu.usbmodem*` on macOS. Open it with a serial terminal, for instance, `tio /dev/ttyACM0`. Without Nexigon, the log looks as follows:
 
 ```text
 starting firmware 20261120-163751
-measured 21.0 °C, 45 % humidity, UV index 0.2 (0.021 V)
-measured 21.1 °C, 45 % humidity, UV index 0.2 (0.022 V)
+measured 21.0 °C, 45 % humidity, UV index 0.2 (0.021 V), 1013.2 hPa
+measured 21.1 °C, 45 % humidity, UV index 0.2 (0.022 V), 1013.2 hPa
 ```
 
 With Nexigon, it looks as follows:
@@ -96,7 +97,7 @@ signed handshake in ... ms
 connected in ... ms
 authenticated as device d_...
 published commands
-published heartbeat and 21.0 °C, 45 % humidity, UV index 0.2 (0.021 V)
+published heartbeat and 21.0 °C, 45 % humidity, UV index 0.2 (0.021 V), 1013.2 hPa
 ```
 
 The events appear in the event log of the device in Nexigon Hub.
@@ -105,14 +106,34 @@ The events appear in the event log of the device in Nexigon Hub.
 
 With Nexigon, the device publishes two events every 30 seconds:
 
-| Category      | Body                                                                                       |
-| ------------- | ------------------------------------------------------------------------------------------ |
-| `heartbeat`   | `{"uptimeSeconds": 42, "firmwareVersion": "20261120-163751"}`                              |
-| `environment` | `{"temperatureCelsius": 21.0, "humidityPercent": 45.0, "uvIndex": 0.21, "uvVolts": 0.021}` |
+| Category      | Body                                                          |
+| ------------- | ------------------------------------------------------------- |
+| `heartbeat`   | `{"uptimeSeconds": 42, "firmwareVersion": "20261120-163751"}` |
+| `environment` | Measurement of the sensors                                    |
 
-The `environment` event carries the measurement of the sensors. `temperatureCelsius` and `humidityPercent` come from the DHT11, and `uvIndex` and `uvVolts` from the UV sensor. `uvVolts` is the output voltage of the UV sensor. `uvIndex` approximates the UV index as that voltage divided by 0.1 V, which suits sensors with the GUVA-S12SD photodiode but is not calibrated.
+The body of an `environment` event looks as follows:
 
-If a sensor fails, the device logs a warning and leaves out its fields. If both fail, it publishes only the heartbeat. A DHT11 fails when it does not answer, for instance, because none is connected. A missing UV sensor goes unnoticed, because the open analog input yields arbitrary voltages. `src/sensors.rs` reads the sensors, and `src/nexigon/events.rs` publishes the events.
+```json
+{
+  "temperatureCelsius": 21.0,
+  "humidityPercent": 45.0,
+  "uvIndex": 0.21,
+  "uvVolts": 0.021,
+  "pressureHectopascals": 1013.2
+}
+```
+
+| Field                  | Sensor | Value                           |
+| ---------------------- | ------ | ------------------------------- |
+| `temperatureCelsius`   | DHT11  | Temperature in degrees Celsius  |
+| `humidityPercent`      | DHT11  | Relative humidity in percent    |
+| `uvIndex`              | UV     | Approximate UV index            |
+| `uvVolts`              | UV     | Output voltage of the UV sensor |
+| `pressureHectopascals` | BMP280 | Air pressure in hectopascals    |
+
+`uvIndex` is `uvVolts` divided by 0.1 V. This approximation suits sensors with the GUVA-S12SD photodiode but is not calibrated. The BMP280 also measures the temperature, which the device does not publish because the DHT11 already does.
+
+If a sensor fails, the device logs a warning and leaves out its fields. If all fail, it publishes only the heartbeat. The DHT11 and the BMP280 fail when they do not answer, for instance, because none is connected. A missing UV sensor goes unnoticed, because the open analog input yields arbitrary voltages. `src/sensors.rs` reads the sensors, and `src/nexigon/events.rs` publishes the events.
 
 ## Commands
 
@@ -165,6 +186,7 @@ The core of the firmware reads the sensors and keeps the device running. Everyth
 | `src/sensors.rs`    | Measurements of all sensors                                 |
 | `src/dht11.rs`      | Readings of the DHT11 sensor                                |
 | `src/uv.rs`         | Readings of the UV sensor                                   |
+| `src/bmp280.rs`     | Readings of the BMP280 sensor                               |
 | `src/display.rs`    | Display of the measurements on the TFT                      |
 | `src/watchdog.rs`   | Watchdog, which resets the device when it hangs             |
 | `src/standalone.rs` | Logging of measurements without Nexigon                     |

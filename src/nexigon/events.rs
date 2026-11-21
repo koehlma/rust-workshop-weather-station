@@ -137,6 +137,11 @@ impl Encode for Environment<'_> {
             reading.uv_index.encode(object.field("uvIndex")?)?;
             reading.volts.encode(object.field("uvVolts")?)?;
         }
+        if let Some(reading) = &self.0.bmp280 {
+            reading
+                .pressure_hectopascals
+                .encode(object.field("pressureHectopascals")?)?;
+        }
         object.end()
     }
 }
