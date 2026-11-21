@@ -149,7 +149,7 @@ If a sensor fails, the device logs a warning and leaves out its fields. If all f
 
 ## Touch Display
 
-The touch display receives the measurements of the weather station, stores them on the microSD card, and shows the latest one. The weather station sends every measurement as a UDP datagram to port 4242 of the touch display. The datagram holds the body of an `environment` event. The weather station measures and sends even while it is not connected to Nexigon Hub.
+The touch display receives the measurements of the weather station, stores them on the microSD card, and shows the latest one. The weather station sends every measurement as a UDP datagram to port 4242 of the touch display. The datagram holds the body of an `environment` event, the time of the measurement in `measuredAt`, and a `sequence` number, which counts the datagrams since the start of the weather station. The weather station sends every measurement right away, without buffering it, and also while it is not connected to Nexigon Hub. The touch display shows every measurement as soon as it arrives.
 
 Two device properties configure the IP addresses. Each device reads its property before every heartbeat, so a change takes effect within 30 seconds:
 
@@ -167,35 +167,45 @@ nexigon-cli devices properties set --protected true <device-id> touch-display.co
 
 Only Nexigon Hub can change a protected property, not the device itself. Without its property, the weather station sends nothing, and the touch display rejects all datagrams.
 
-The touch display appends every accepted measurement to `WEATHER.LOG` in the root directory of the first partition of the card, one JSON object per line:
+### Storage Format
 
-```json
-{
-  "receivedAt": "2026-11-21T13:43:50Z",
-  "sender": "10.10.2.51:22972",
-  "measurement": {
-    "temperatureCelsius": 8.9,
-    "humidityPercent": 60.0,
-    "uvIndex": 0.2,
-    "uvVolts": 0.02,
-    "pressureHectopascals": 958.1
-  }
-}
+The touch display stores the measurements in one file per day in UTC, `LOG/<year>/<yyyymmdd>.WSL`, for instance, `LOG/2026/20261121.WSL`. A file consists of blocks of 512 bytes, one sector of the card. A block holds a header and up to 31 records of 16 bytes, one for each measurement. A day of measurements takes 46 KB, and a year about 17 MB. `crates/apps/touch-display/src/format.rs` describes the layout.
+
+The header holds the number of records, the index of the block in its file, and a CRC-32, which detects blocks that were only partly written. A record holds the time of the measurement, the temperature, the humidity, the air pressure, and the voltage of the UV sensor as integers, with a bit for each value that is present. The UV index is derived from the voltage. The time is `measuredAt`, or the time of reception if the weather station has not synchronized its clock yet.
+
+The touch display collects the records of a block in memory. It writes a block once it is full, which takes about 15 minutes, and writes a partial block every 5 minutes at the same position. A power failure thus loses at most the measurements of the last 5 minutes. After a restart, the touch display continues the last block of the file if it is partial. After a failure, for instance, because no card is inserted, it starts the card again with the next write.
+
+To read the measurements on a computer, export them as CSV:
+
+```sh
+scripts/export.py /media/sdcard/LOG > measurements.csv
 ```
 
-`receivedAt` is missing while the clock of the touch display is not synchronized. The touch display closes the file after every line, so the card can be removed between measurements. After a failure, for instance, because no card is inserted, it starts the card again with the next measurement.
+The script takes files or directories and skips invalid blocks with a warning.
+
+### Storage Events
 
 With every heartbeat, the touch display publishes a `storage` event with counts since its start:
 
 ```json
-{ "storedMeasurements": 4, "rejectedDatagrams": 2, "failedWrites": 0 }
+{
+  "storedMeasurements": 120,
+  "bufferedMeasurements": 3,
+  "droppedMeasurements": 0,
+  "rejectedDatagrams": 2,
+  "lostDatagrams": 0
+}
 ```
 
-| Field                | Count                                                   |
-| -------------------- | ------------------------------------------------------- |
-| `storedMeasurements` | Measurements stored on the card                         |
-| `rejectedDatagrams`  | Datagrams from another address or without a measurement |
-| `failedWrites`       | Measurements that could not be stored on the card       |
+| Field                  | Count                                                                                     |
+| ---------------------- | ----------------------------------------------------------------------------------------- |
+| `storedMeasurements`   | Measurements written to the card                                                          |
+| `bufferedMeasurements` | Measurements in memory that are not on the card yet                                       |
+| `droppedMeasurements`  | Measurements that could not be stored                                                     |
+| `rejectedDatagrams`    | Datagrams from another address, with a repeated sequence number, or without a measurement |
+| `lostDatagrams`        | Datagrams that never arrived, according to the gaps in the sequence numbers               |
+
+### Pins
 
 The display runs in landscape, as in the example code of Waveshare. The firmware keeps the touch controller deselected and does not use it.
 
@@ -283,7 +293,8 @@ The weather station enables the `nexigon` feature through its own feature of the
 | ---------------------------------------- | -------------------------------------------------------- |
 | `main.rs`                                | Start of the firmware, configuration, and storage events |
 | `receiver.rs`                            | Reception of measurements, which it stores and shows     |
-| `storage.rs`                             | File on the microSD card                                 |
+| `storage.rs`                             | Files on the microSD card and writing of blocks          |
+| `format.rs`                              | Binary format of the files                               |
 | `display.rs`                             | Display of the latest measurement                        |
 
 ### Connection to Nexigon Hub
@@ -341,7 +352,8 @@ The following limitations concern the connection to Nexigon Hub and between the 
 - The firmware implements a basic version of the OTA update contract. Besides the version path, it supports `hold` and `asset`. It does not support maintenance windows, spreading updates over time, or checkpoint versions. It does not retry a failed update on its own: the update stays failed until the configuration changes or the failure count in the status is cleared.
 - The device offers commands only. It rejects other channels, such as those for terminals and port forwarding.
 - Command invocations must fit into 1 KiB and responses to actions into 4 KiB.
-- The touch display identifies the weather station by its IP address only, so any device in the network can send it measurements from that address. Datagrams are not acknowledged, so measurements are lost while the touch display is unreachable.
+- The touch display identifies the weather station by its IP address only, so any device in the network can send it measurements from that address. Datagrams are not acknowledged, so measurements are lost while the touch display is unreachable. The `lostDatagrams` count of storage events shows how many.
+- A power failure of the touch display loses the measurements that are not on the card yet, at most those of the last 5 minutes.
 - Reading the flash with a debugger while the firmware writes an update corrupts the update. The device then hangs until the watchdog resets it, and the update fails as interrupted.
 - `vendor/embedded-tls/` holds a patched version of `embedded-tls`. See `vendor/README.md`.
 

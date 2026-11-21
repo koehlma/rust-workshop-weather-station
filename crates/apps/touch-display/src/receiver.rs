@@ -1,16 +1,17 @@
 //! Reception of measurements from the weather station.
 //!
 //! [`task`] receives measurements as UDP datagrams on [`PORT`]. A datagram
-//! holds the body of an environment event of the weather station. The task
+//! holds the body of an environment event of the weather station, the time
+//! of the measurement in `measuredAt`, and a `sequence` number, which the
+//! weather station increments with every datagram since its start. The task
 //! accepts measurements only from the IP address that [`set_sensor_address`]
-//! sets. It appends every accepted measurement as a line of JSON to the
-//! [`Storage`] and shows it on the [`Display`]:
+//! sets, and rejects repeated sequence numbers. It adds every accepted
+//! measurement to the [`Storage`] and shows the latest one on the
+//! [`Display`].
 //!
-//! ```json
-//! {"receivedAt":"2026-11-21T14:00:00Z","sender":"10.10.2.30:49152","measurement":{"temperatureCelsius":21.0}}
-//! ```
-//!
-//! `receivedAt` is missing while the clock is not synchronized.
+//! A measurement without `measuredAt` gets the time of its reception. While
+//! the clock of the touch display is not synchronized either, up to
+//! [`UNTIMED_CAPACITY`] such measurements wait in memory.
 
 use core::cell::Cell;
 use core::fmt::Write as _;
@@ -23,61 +24,58 @@ use embassy_net::udp::PacketMetadata;
 use embassy_net::udp::UdpSocket;
 use embassy_sync::blocking_mutex::Mutex;
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
+use embassy_time::Instant;
+use embassy_time::with_deadline;
+use heapless::Deque;
 use heapless::String;
 use log::info;
 use log::warn;
 use pico_platform::nexigon;
 use pico_platform::nexigon::sidex_embedded::Decode;
 use pico_platform::nexigon::sidex_embedded::DecodeError;
-use pico_platform::nexigon::sidex_embedded::Encode;
-use pico_platform::nexigon::sidex_embedded::EncodeError;
-use pico_platform::nexigon::sidex_embedded::json;
 use pico_platform::nexigon::sidex_embedded::json::Reader;
-use pico_platform::nexigon::sidex_embedded::json::Writer;
 use pico_platform::nexigon::sidex_embedded::types::Json;
-use pico_platform::nexigon::sidex_embedded::types::Str;
 use pico_platform::nexigon::sidex_embedded::types::Timestamp;
 use portable_atomic::AtomicU32;
 use portable_atomic::Ordering;
 
 use crate::display::Display;
+use crate::format::Record;
+use crate::storage;
 use crate::storage::Storage;
 
 /// UDP port on which the display receives measurements.
 pub const PORT: u16 = 4242;
 
+/// Maximum number of measurements that wait for the clock.
+const UNTIMED_CAPACITY: usize = 16;
+
 /// IP address of the weather station, if configured.
 static SENSOR_ADDRESS: Mutex<CriticalSectionRawMutex, Cell<Option<Ipv4Addr>>> =
     Mutex::new(Cell::new(None));
 
-/// Number of measurements stored since the start.
-static STORED: AtomicU32 = AtomicU32::new(0);
-
-/// Number of datagrams rejected since the start, because they came from
-/// another address or did not hold a measurement.
+/// Number of datagrams rejected since the start.
 static REJECTED: AtomicU32 = AtomicU32::new(0);
 
-/// Number of measurements that could not be stored since the start.
-static FAILED: AtomicU32 = AtomicU32::new(0);
+/// Number of datagrams lost since the start, according to the gaps in their
+/// sequence numbers.
+static LOST: AtomicU32 = AtomicU32::new(0);
 
-/// Counts of the measurements since the start.
+/// Counts of the datagrams since the start.
 #[derive(Debug, Clone, Copy)]
 pub struct Counts {
-    /// Measurements stored on the card.
-    pub stored: u32,
-    /// Datagrams rejected, because they came from another address or did not
-    /// hold a measurement.
+    /// Datagrams rejected because they came from another address, repeated a
+    /// sequence number, or did not hold a measurement.
     pub rejected: u32,
-    /// Measurements that could not be stored on the card.
-    pub failed: u32,
+    /// Datagrams lost, according to the gaps in their sequence numbers.
+    pub lost: u32,
 }
 
-/// Returns the counts of the measurements since the start.
+/// Returns the counts of the datagrams since the start.
 pub fn counts() -> Counts {
     Counts {
-        stored: STORED.load(Ordering::Relaxed),
         rejected: REJECTED.load(Ordering::Relaxed),
-        failed: FAILED.load(Ordering::Relaxed),
+        lost: LOST.load(Ordering::Relaxed),
     }
 }
 
@@ -111,85 +109,145 @@ pub async fn task(stack: Stack<'static>, mut display: Display, mut storage: Stor
     socket.bind(PORT).expect("the socket is not bound yet");
     info!("receiving measurements on UDP port {PORT}");
     let mut datagram = [0; 256];
-    let mut line = [0; 512];
+    let mut receiver = Receiver {
+        last_sequence: None,
+        untimed: Deque::new(),
+        latest: None,
+    };
     loop {
-        let (length, metadata) = match socket.recv_from(&mut datagram).await {
-            Ok(received) => received,
-            Err(error) => {
+        let received = match storage.checkpoint_deadline() {
+            Some(deadline) => with_deadline(deadline, socket.recv_from(&mut datagram))
+                .await
+                .ok(),
+            None => Some(socket.recv_from(&mut datagram).await),
+        };
+        match received {
+            None => storage.checkpoint(),
+            Some(Err(error)) => {
                 warn!("failed to receive a datagram: {error:?}");
                 REJECTED.add(1, Ordering::Relaxed);
                 continue;
             }
-        };
-        let sender = metadata.endpoint;
-        let Some(measurement) = accept(sender, &datagram[..length]) else {
-            REJECTED.add(1, Ordering::Relaxed);
-            continue;
-        };
-        let record = Record {
-            received_at: nexigon::now(),
-            sender,
-            measurement: measurement.json,
-        };
-        let length = json::to_slice(&record, &mut line[..511])
-            .expect("records of datagrams that fit into the buffer fit into the line");
-        line[length] = b'\n';
-        let status = match storage.append(&line[..=length]) {
-            Ok(()) => {
-                STORED.add(1, Ordering::Relaxed);
-                None
+            Some(Ok((length, metadata))) => {
+                match receiver.accept(metadata.endpoint, &datagram[..length]) {
+                    Some(measurement) => receiver.add(&mut storage, measurement),
+                    None => {
+                        REJECTED.add(1, Ordering::Relaxed);
+                        continue;
+                    }
+                }
             }
-            Err(error) => {
-                warn!("failed to store the measurement: {error}");
-                FAILED.add(1, Ordering::Relaxed);
-                Some("SD card failed")
-            }
-        };
-        show(&mut display, &measurement.values, status);
+        }
+        receiver.show(&mut display, &storage);
     }
 }
 
-/// Returns the measurement of `datagram`, or `None` if it is not from the
-/// weather station or holds no measurement.
-fn accept<'a>(sender: IpEndpoint, datagram: &'a [u8]) -> Option<Measurement<'a>> {
-    let Some(address) = SENSOR_ADDRESS.lock(Cell::get) else {
-        warn!("rejected a datagram from {sender}: no weather station configured");
-        return None;
-    };
-    if sender.addr != IpAddress::Ipv4(address) {
-        warn!("rejected a datagram from {sender}: expected {address}");
-        return None;
-    }
-    let measurement = core::str::from_utf8(datagram)
-        .ok()
-        .and_then(|text| Json::parse(text).ok())
-        .and_then(|json| {
-            let values = json.decode().ok()?;
-            Some(Measurement { json, values })
-        });
-    if measurement.is_none() {
-        warn!("rejected a datagram from {sender}: no measurement");
-    }
-    measurement
+/// State of the reception.
+struct Receiver {
+    /// Sequence number of the latest accepted datagram.
+    last_sequence: Option<u32>,
+    /// Measurements that wait for the clock, with the time of their
+    /// reception.
+    untimed: Deque<(Instant, Measurement), UNTIMED_CAPACITY>,
+    /// Latest accepted measurement.
+    latest: Option<Measurement>,
 }
 
-/// Shows the values of the latest measurement and the `status` of the card,
-/// or the number of stored measurements if it is `None`.
-fn show(display: &mut Display, values: &Values, status: Option<&str>) {
-    let mut storage = Line::new();
-    // Lines that do not fit are cut off.
-    let _ = match status {
-        Some(status) => storage.write_str(status),
-        None => write!(storage, "{} stored on SD card", counts().stored),
-    };
-    let lines = [
-        value_line("Temperature", values.temperature_celsius, 1, "°C"),
-        value_line("Humidity", values.humidity_percent, 0, "%"),
-        value_line("UV index", values.uv_index, 1, ""),
-        value_line("Pressure", values.pressure_hectopascals, 1, "hPa"),
-        storage,
-    ];
-    display.show(&lines.each_ref().map(Line::as_str));
+impl Receiver {
+    /// Returns the measurement of `datagram`, or `None` if it is not from the
+    /// weather station, repeats the sequence number of the previous datagram,
+    /// or holds no measurement.
+    fn accept(&mut self, sender: IpEndpoint, datagram: &[u8]) -> Option<Measurement> {
+        let Some(address) = SENSOR_ADDRESS.lock(Cell::get) else {
+            warn!("rejected a datagram from {sender}: no weather station configured");
+            return None;
+        };
+        if sender.addr != IpAddress::Ipv4(address) {
+            warn!("rejected a datagram from {sender}: expected {address}");
+            return None;
+        }
+        let Some(measurement) = core::str::from_utf8(datagram)
+            .ok()
+            .and_then(|text| Json::parse(text).ok())
+            .and_then(|json| json.decode::<Measurement>().ok())
+        else {
+            warn!("rejected a datagram from {sender}: no measurement");
+            return None;
+        };
+        if let Some(sequence) = measurement.sequence {
+            match self.last_sequence {
+                Some(last) if sequence == last => {
+                    warn!("rejected a repeated datagram {sequence} from {sender}");
+                    return None;
+                }
+                // A smaller sequence number means that the weather station
+                // has restarted.
+                Some(last) if sequence > last.saturating_add(1) => {
+                    let lost = sequence - last - 1;
+                    warn!("lost {lost} datagrams before datagram {sequence}");
+                    LOST.add(lost, Ordering::Relaxed);
+                }
+                _ => {}
+            }
+            self.last_sequence = Some(sequence);
+        }
+        Some(measurement)
+    }
+
+    /// Adds `measurement` to `storage`, after the measurements that wait for
+    /// the clock.
+    fn add(&mut self, storage: &mut Storage, measurement: Measurement) {
+        self.latest = Some(measurement);
+        let time = measurement
+            .measured_at
+            .and_then(|time| u32::try_from(time.unix_seconds()).ok());
+        match nexigon::unix_seconds() {
+            Some(now) => {
+                while let Some((received, waiting)) = self.untimed.pop_front() {
+                    let age = received.elapsed().as_secs();
+                    storage.push(&waiting.record(now.saturating_sub(age) as u32));
+                }
+                storage.push(&measurement.record(time.unwrap_or(now as u32)));
+            }
+            None => match time {
+                Some(time) => storage.push(&measurement.record(time)),
+                None => {
+                    if self.untimed.is_full() {
+                        warn!("dropped a measurement without time");
+                        self.untimed.pop_front();
+                    }
+                    let _ = self.untimed.push_back((Instant::now(), measurement));
+                }
+            },
+        }
+    }
+
+    /// Shows the latest measurement and the counts of the storage.
+    fn show(&self, display: &mut Display, storage: &Storage) {
+        let Some(latest) = &self.latest else {
+            return;
+        };
+        let counts = storage::counts();
+        let mut status = Line::new();
+        // Lines that do not fit are cut off.
+        let _ = if storage.has_failed() {
+            write!(status, "SD card failed")
+        } else {
+            write!(
+                status,
+                "Stored {}, buffered {}",
+                counts.stored, counts.buffered
+            )
+        };
+        let lines = [
+            value_line("Temperature", latest.temperature_celsius, 1, "°C"),
+            value_line("Humidity", latest.humidity_percent, 0, "%"),
+            value_line("UV index", latest.uv_index, 1, ""),
+            value_line("Pressure", latest.pressure_hectopascals, 1, "hPa"),
+            status,
+        ];
+        display.show(&lines.each_ref().map(Line::as_str));
+    }
 }
 
 /// Line of text on the display.
@@ -207,57 +265,53 @@ fn value_line(label: &str, value: Option<f32>, precision: usize, unit: &str) -> 
 }
 
 /// Measurement of a datagram.
-struct Measurement<'a> {
-    /// Body of the datagram.
-    json: Json<'a>,
-    /// Values of the body that the display shows.
-    values: Values,
-}
-
-/// Values of a measurement that the display shows.
-struct Values {
+#[derive(Debug, Clone, Copy)]
+struct Measurement {
+    sequence: Option<u32>,
+    measured_at: Option<Timestamp>,
     temperature_celsius: Option<f32>,
     humidity_percent: Option<f32>,
-    uv_index: Option<f32>,
     pressure_hectopascals: Option<f32>,
+    uv_volts: Option<f32>,
+    /// UV index, which the display shows but the storage derives from the
+    /// voltage.
+    uv_index: Option<f32>,
 }
 
-impl<'a> Decode<'a> for Values {
+impl Measurement {
+    /// Returns the record of the measurement at `time` in Unix seconds.
+    fn record(&self, time: u32) -> Record {
+        Record {
+            time,
+            temperature_celsius: self.temperature_celsius,
+            humidity_percent: self.humidity_percent,
+            pressure_hectopascals: self.pressure_hectopascals,
+            uv_volts: self.uv_volts,
+        }
+    }
+}
+
+impl<'a> Decode<'a> for Measurement {
     const IS_RECORD: bool = true;
 
     fn decode(reader: &mut Reader<'a>) -> Result<Self, DecodeError> {
         let fields = reader.record(&[
+            &["sequence"],
+            &["measuredAt"],
             &["temperatureCelsius"],
             &["humidityPercent"],
-            &["uvIndex"],
             &["pressureHectopascals"],
+            &["uvVolts"],
+            &["uvIndex"],
         ])?;
         Ok(Self {
-            temperature_celsius: fields.optional(0)?,
-            humidity_percent: fields.optional(1)?,
-            uv_index: fields.optional(2)?,
-            pressure_hectopascals: fields.optional(3)?,
+            sequence: fields.optional(0)?,
+            measured_at: fields.optional(1)?,
+            temperature_celsius: fields.optional(2)?,
+            humidity_percent: fields.optional(3)?,
+            pressure_hectopascals: fields.optional(4)?,
+            uv_volts: fields.optional(5)?,
+            uv_index: fields.optional(6)?,
         })
-    }
-}
-
-/// Line of the file on the card.
-struct Record<'a> {
-    received_at: Option<Timestamp>,
-    sender: IpEndpoint,
-    measurement: Json<'a>,
-}
-
-impl Encode for Record<'_> {
-    fn encode(&self, writer: &mut Writer<'_>) -> Result<(), EncodeError> {
-        let mut object = writer.object()?;
-        if let Some(received_at) = &self.received_at {
-            received_at.encode(object.field("receivedAt")?)?;
-        }
-        let mut sender = String::<21>::new();
-        write!(sender, "{}", self.sender).expect("IPv4 endpoints have at most 21 bytes");
-        Str::new(&sender).encode(object.field("sender")?)?;
-        self.measurement.encode(object.field("measurement")?)?;
-        object.end()
     }
 }

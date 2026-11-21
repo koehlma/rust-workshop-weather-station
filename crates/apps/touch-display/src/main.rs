@@ -2,9 +2,9 @@
 //! which stores the measurements of the weather station on a microSD card.
 //!
 //! The [`receiver`] receives the measurements of the weather station over
-//! UDP, appends them to a file on the microSD card through [`storage`], and
-//! shows the latest one on the [`display`]. The display, the microSD slot, and
-//! the touch controller share SPI1.
+//! UDP, writes them to the microSD card through [`storage`] in the binary
+//! [`format`], and shows the latest one on the [`display`]. The display, the
+//! microSD slot, and the touch controller share SPI1.
 //!
 //! The firmware connects the device to Nexigon Hub with its own identity in
 //! `identity/` through `pico_platform::nexigon`. It runs commands, installs
@@ -22,6 +22,7 @@
 #![no_main]
 
 mod display;
+mod format;
 mod receiver;
 mod storage;
 
@@ -167,7 +168,10 @@ impl Application for TouchDisplay {
     }
 
     async fn next_event(&mut self) -> Option<StorageEvent> {
-        Some(StorageEvent(receiver::counts()))
+        Some(StorageEvent {
+            storage: storage::counts(),
+            receiver: receiver::counts(),
+        })
     }
 }
 
@@ -193,16 +197,29 @@ impl<'a> Decode<'a> for DisplayConfig<'a> {
     }
 }
 
-/// Body of storage events, with the counts of the measurements since the
-/// start.
-struct StorageEvent(receiver::Counts);
+/// Body of storage events, with the counts of the measurements and datagrams
+/// since the start.
+struct StorageEvent {
+    storage: storage::Counts,
+    receiver: receiver::Counts,
+}
 
 impl Encode for StorageEvent {
     fn encode(&self, writer: &mut Writer<'_>) -> Result<(), EncodeError> {
         let mut object = writer.object()?;
-        self.0.stored.encode(object.field("storedMeasurements")?)?;
-        self.0.rejected.encode(object.field("rejectedDatagrams")?)?;
-        self.0.failed.encode(object.field("failedWrites")?)?;
+        self.storage
+            .stored
+            .encode(object.field("storedMeasurements")?)?;
+        self.storage
+            .buffered
+            .encode(object.field("bufferedMeasurements")?)?;
+        self.storage
+            .dropped
+            .encode(object.field("droppedMeasurements")?)?;
+        self.receiver
+            .rejected
+            .encode(object.field("rejectedDatagrams")?)?;
+        self.receiver.lost.encode(object.field("lostDatagrams")?)?;
         object.end()
     }
 }

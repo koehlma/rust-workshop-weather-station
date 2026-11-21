@@ -12,7 +12,9 @@
 //! { "displayAddress": "10.10.2.28" }
 //! ```
 //!
-//! The datagram holds the body of an environment event. The latest
+//! The datagram holds the body of an environment event, the time of the
+//! measurement in `measuredAt` once the clock is synchronized, and a
+//! `sequence` number, which counts the datagrams since the start. The latest
 //! measurement is also published as an environment event with the next
 //! heartbeat. The configuration and the identity in `identity/` are embedded
 //! at compile time.
@@ -41,10 +43,12 @@ use pico_platform::nexigon::sidex_embedded::DecodeError;
 use pico_platform::nexigon::sidex_embedded::Encode;
 use pico_platform::nexigon::sidex_embedded::EncodeError;
 use pico_platform::nexigon::sidex_embedded::json;
+use pico_platform::nexigon::sidex_embedded::json::ObjectWriter;
 use pico_platform::nexigon::sidex_embedded::json::Reader;
 use pico_platform::nexigon::sidex_embedded::json::Writer;
 use pico_platform::nexigon::sidex_embedded::types::Json;
 use pico_platform::nexigon::sidex_embedded::types::Str;
+use pico_platform::nexigon::sidex_embedded::types::Timestamp;
 
 use crate::sensors::Measurement;
 use crate::station::Station;
@@ -144,15 +148,23 @@ async fn measure_task(mut station: Station, stack: Stack<'static>) -> ! {
         .bind(0)
         .expect("the socket is not bound yet and port 0 picks a free port");
     let mut datagram = [0; 256];
+    let mut sequence = 0;
     let mut ticker = Ticker::every(MEASUREMENT_INTERVAL);
     loop {
+        let measured_at = pico_platform::nexigon::now();
         let measurement = station.measure().await;
         // Sensors that fail are logged as they are measured.
         if !measurement.is_empty() {
             info!("measured {measurement}");
             LATEST.lock(|latest| latest.set(Some(measurement)));
             if let Some(address) = DISPLAY_ADDRESS.lock(Cell::get) {
-                let length = json::to_slice(&Environment(measurement), &mut datagram)
+                let body = Datagram {
+                    sequence,
+                    measured_at,
+                    environment: Environment(measurement),
+                };
+                sequence = sequence.wrapping_add(1);
+                let length = json::to_slice(&body, &mut datagram)
                     .expect("measurements fit into the datagram");
                 let endpoint = IpEndpoint::new(IpAddress::Ipv4(address), DISPLAY_PORT);
                 match with_timeout(SEND_TIMEOUT, socket.send_to(&datagram[..length], endpoint))
@@ -190,13 +202,41 @@ impl<'a> Decode<'a> for StationConfig<'a> {
     }
 }
 
-/// Body of environment events and of the datagrams to the display, with the
-/// fields of the sensors that answered.
+/// Body of the datagrams to the display.
+struct Datagram {
+    /// Number of the datagram since the start.
+    sequence: u32,
+    /// Time of the measurement, if the clock is synchronized.
+    measured_at: Option<Timestamp>,
+    environment: Environment,
+}
+
+impl Encode for Datagram {
+    fn encode(&self, writer: &mut Writer<'_>) -> Result<(), EncodeError> {
+        let mut object = writer.object()?;
+        self.sequence.encode(object.field("sequence")?)?;
+        if let Some(measured_at) = &self.measured_at {
+            measured_at.encode(object.field("measuredAt")?)?;
+        }
+        self.environment.encode_fields(&mut object)?;
+        object.end()
+    }
+}
+
+/// Body of environment events, with the fields of the sensors that answered.
 pub struct Environment(Measurement);
 
 impl Encode for Environment {
     fn encode(&self, writer: &mut Writer<'_>) -> Result<(), EncodeError> {
         let mut object = writer.object()?;
+        self.encode_fields(&mut object)?;
+        object.end()
+    }
+}
+
+impl Environment {
+    /// Writes the fields of the sensors that answered to `object`.
+    fn encode_fields(&self, object: &mut ObjectWriter<'_, '_>) -> Result<(), EncodeError> {
         if let Some(reading) = &self.0.dht11 {
             reading
                 .temperature_celsius
@@ -214,6 +254,6 @@ impl Encode for Environment {
                 .pressure_hectopascals
                 .encode(object.field("pressureHectopascals")?)?;
         }
-        object.end()
+        Ok(())
     }
 }
