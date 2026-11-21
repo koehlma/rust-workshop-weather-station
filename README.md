@@ -1,6 +1,6 @@
 # Weather Station on the Raspberry Pi Pico W
 
-Firmware for a weather station built from a Raspberry Pi Pico W (RP2040), a DHT11 sensor, and a SEN-UV01 UV sensor. Every 30 seconds, it measures the temperature, humidity, and UV radiation. It is written in Rust with [Embassy](https://embassy.dev) and runs without an operating system or an allocator.
+Firmware for a weather station built from a Raspberry Pi Pico W (RP2040) on a Joy-IT explorer board and a SEN-UV01 UV sensor. Every 30 seconds, it measures the temperature, humidity, and UV radiation and shows them on the display of the board. It is written in Rust with [Embassy](https://embassy.dev) and runs without an operating system or an allocator.
 
 The `nexigon` feature, which is enabled by default, connects the weather station to Nexigon Hub. Every 30 seconds, the device publishes a heartbeat event and the measurement of the sensors. It runs commands that Nexigon Hub sends and installs updates that Nexigon Hub rolls out. A bootloader swaps in updates and rolls back those that fail. Without the feature, the firmware logs the measurements to the USB serial port.
 
@@ -8,8 +8,7 @@ With the feature, the firmware holds one persistent connection to Nexigon Hub, w
 
 ## Requirements
 
-- A Raspberry Pi Pico W.
-- A DHT11 sensor connected to GP0, for instance, the one on the Joy-IT explorer board (RB-P-XPLR). Turn on its switch on the board.
+- A Raspberry Pi Pico W on a Joy-IT explorer board (RB-P-XPLR). The firmware uses its DHT11 sensor on GP0 and its 1.8" display, an ST7735 on SPI0. Turn on their switches on the board.
 - A Joy-IT SEN-UV01 UV sensor connected to GP26, the first analog input. Connect its VCC to 3V3 (OUT), GND to GND, and OUT to GP26. Power it from 3.3 V, the most that the analog inputs of the Pico W accept.
 - [Rust](https://rustup.rs). `rust-toolchain.toml` selects the toolchain and installs the `thumbv6m-none-eabi` target and `llvm-objcopy`.
 - `python3`, which creates the UF2 file.
@@ -74,6 +73,8 @@ mise run build -- --no-default-features
 The version of the firmware is the time of the build, for instance, `20261120-163751`. Set `FIRMWARE_VERSION` to choose another one.
 
 To flash the bootloader and the firmware, hold the BOOTSEL button while connecting the Pico W over USB. It appears as a drive named `RPI-RP2`. Copy `target/nexigon-mcu-rp-example.uf2` to the drive. The Pico W restarts with the new firmware. With Nexigon, the device afterward receives new versions through Nexigon Hub.
+
+The display shows the latest temperature, humidity, and UV index, with dashes for a sensor that failed.
 
 The firmware logs to a USB serial port, for instance, `/dev/ttyACM0` on Linux or `/dev/cu.usbmodem*` on macOS. Open it with a serial terminal, for instance, `tio /dev/ttyACM0`. Without Nexigon, the log looks as follows:
 
@@ -155,14 +156,16 @@ update completed
 
 ## How It Works
 
-The core of the firmware reads the sensors and keeps the device running. Everything that concerns Nexigon is in `src/nexigon/`, which only the `nexigon` feature compiles, together with its dependencies. Its entry point is `nexigon::run`, which takes the peripherals it needs and the sensors. Without the feature, `src/standalone.rs` logs the measurements instead. Both variants use the same bootloader and flash layout, so a device can switch between them when flashed over USB.
+The core of the firmware reads the sensors and keeps the device running. Everything that concerns Nexigon is in `src/nexigon/`, which only the `nexigon` feature compiles, together with its dependencies. Its entry point is `nexigon::run`, which takes the peripherals it needs and the station with the sensors and the display. Without the feature, `src/standalone.rs` logs the measurements instead. Both variants use the same bootloader and flash layout, so a device can switch between them when flashed over USB.
 
 | File                | Purpose                                                     |
 | ------------------- | ----------------------------------------------------------- |
-| `src/main.rs`       | Start of the firmware, which hands the sensors to a variant |
+| `src/main.rs`       | Start of the firmware, which hands the station to a variant |
+| `src/station.rs`    | Station, which measures and shows the measurements          |
 | `src/sensors.rs`    | Measurements of all sensors                                 |
 | `src/dht11.rs`      | Readings of the DHT11 sensor                                |
 | `src/uv.rs`         | Readings of the UV sensor                                   |
+| `src/display.rs`    | Display of the measurements on the TFT                      |
 | `src/watchdog.rs`   | Watchdog, which resets the device when it hangs             |
 | `src/standalone.rs` | Logging of measurements without Nexigon                     |
 | `src/nexigon/`      | Connection to Nexigon Hub, with the `nexigon` feature       |

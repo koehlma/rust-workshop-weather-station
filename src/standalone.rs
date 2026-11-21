@@ -1,20 +1,20 @@
 //! Operation without Nexigon, when the `nexigon` feature is disabled.
 //!
-//! [`run`] logs a measurement of the sensors every [`MEASUREMENT_INTERVAL`].
+//! [`run`] measures every [`MEASUREMENT_INTERVAL`] and logs the measurement.
 
 use embassy_time::Duration;
 use embassy_time::Timer;
 use log::info;
 
-use crate::sensors::Sensors;
+use crate::station::Station;
 
 /// Interval between measurements.
 const MEASUREMENT_INTERVAL: Duration = Duration::from_secs(30);
 
-/// Logs a measurement of the sensors every [`MEASUREMENT_INTERVAL`].
-pub async fn run(mut sensors: Sensors) -> ! {
+/// Measures every [`MEASUREMENT_INTERVAL`] and logs the measurement.
+pub async fn run(mut station: Station) -> ! {
     loop {
-        let measurement = sensors.measure().await;
+        let measurement = station.measure().await;
         // Sensors that fail are logged as they are measured.
         if !measurement.is_empty() {
             info!("measured {measurement}");

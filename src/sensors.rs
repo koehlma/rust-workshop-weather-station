@@ -34,9 +34,6 @@ impl Sensors {
     }
 
     /// Reads all sensors.
-    ///
-    /// The DHT11 returns its previous measurement, so measurements should be
-    /// at least 2 seconds apart.
     pub async fn measure(&mut self) -> Measurement {
         let dht11 = self
             .dht11

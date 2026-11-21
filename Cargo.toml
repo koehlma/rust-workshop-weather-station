@@ -22,13 +22,10 @@ nexigon = [
     "dep:embassy-sync",
     "dep:embedded-io-async",
     "dep:embedded-tls",
-    "dep:heapless",
     "dep:p256",
-    "dep:portable-atomic",
     "dep:sha2",
     "dep:sidex-embedded",
     "dep:signature",
-    "dep:static_cell",
 ]
 
 [dependencies]
@@ -38,8 +35,16 @@ embassy-executor = { version = "0.10", features = ["platform-cortex-m", "executo
 embassy-rp = { version = "0.10", features = ["rp2040", "critical-section-impl", "time-driver"] }
 embassy-time = "0.5"
 embassy-usb-logger = "0.6"
+embedded-graphics = "0.8"
+embedded-hal-bus = "0.3"
+heapless = "0.8"
 log = "0.4"
+mipidsi = "0.10"
 panic-reset = "0.1"
+# Only enables a feature: The RP2040 lacks atomic compare-and-swap instructions, which
+# `static_cell` needs, so atomics use critical sections instead.
+portable-atomic = { version = "1", features = ["critical-section"] }
+static_cell = "2"
 
 # Dependencies of the `nexigon` feature.
 cyw43 = { version = "0.7", optional = true }
@@ -52,15 +57,10 @@ embassy-net = { version = "0.9", features = ["tcp", "udp", "dns", "dhcpv4", "pro
 embassy-sync = { version = "0.8", optional = true }
 embedded-io-async = { version = "0.7", optional = true }
 embedded-tls = { version = "0.19", default-features = false, features = ["log"], optional = true }
-heapless = { version = "0.8", optional = true }
 p256 = { version = "0.13", default-features = false, features = ["ecdsa", "pkcs8"], optional = true }
-# Only enables a feature: The RP2040 lacks atomic compare-and-swap instructions, which
-# `static_cell` needs, so atomics use critical sections instead.
-portable-atomic = { version = "1", features = ["critical-section"], optional = true }
 sha2 = { version = "0.10", default-features = false, optional = true }
 sidex-embedded = { git = "https://github.com/silitics/sidex", branch = "work/agents/rust-embedded", optional = true }
 signature = { version = "2", default-features = false, optional = true }
-static_cell = { version = "2", optional = true }
 
 [profile.release]
 debug = 2
