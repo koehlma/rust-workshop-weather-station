@@ -61,8 +61,8 @@ NEXIGON_DEPLOYMENT_TOKEN = "deployment_..."
 WIFI_SSID = "..."
 WIFI_PASSWORD = "..."
 # Optional: version paths from which the devices install updates.
-WEATHER_STATION_UPDATE_PATH = "default/weather-station/latest"
-TOUCH_DISPLAY_UPDATE_PATH = "default/touch-display/latest"
+WEATHER_STATION_UPDATE_PATH = "default/rp-test/latest"
+TOUCH_DISPLAY_UPDATE_PATH = "default/rp-display/latest"
 # Only needed for releases.
 NEXIGON_ORG_TOKEN = "org_sk_..."
 ```
@@ -174,16 +174,16 @@ To add a command, describe it in `publish_manifest` and handle it in `execute`, 
 
 ## Release an Update
 
-Releases are versions of a package in a repository of Nexigon Hub. Give each crate its own package. Build and publish a new version, for instance, of the weather station:
+Releases are versions of a package in a repository of Nexigon Hub. Each crate has its own package: `rp-test` for the weather station and `rp-display` for the touch display. Build and publish a new version, for instance, of the weather station:
 
 ```sh
 mise run build weather-station
-mise run release weather-station default/weather-station
+mise run release weather-station default/rp-test
 ```
 
-The release uploads `target/weather-station/firmware.bin` and its signature `firmware.bin.sig` as assets of a new version of the package `weather-station` in the repository `default`. It tags the version with the firmware version, a locked tag, and moves the tag `latest` to it.
+The release uploads `target/weather-station/firmware.bin` and its signature `firmware.bin.sig` as assets of a new version of the package `rp-test` in the repository `default`. It tags the version with the firmware version, a locked tag, and moves the tag `latest` to it.
 
-Devices built with `WEATHER_STATION_UPDATE_PATH = "default/weather-station/latest"` install the version that the tag `latest` points to. The `dev.nexigon.ota.config` property of a device overrides the defaults built into the firmware. For instance, it pins a version with `{"path": "default/weather-station/20261120-163751"}` or holds updates with `{"hold": true}`.
+Devices built with `WEATHER_STATION_UPDATE_PATH = "default/rp-test/latest"` install the version that the tag `latest` points to. The `dev.nexigon.ota.config` property of a device overrides the defaults built into the firmware. For instance, it pins a version with `{"path": "default/rp-test/20261120-163751"}` or holds updates with `{"hold": true}`.
 
 The device checks for updates when it connects, every 5 minutes, and when it receives the command `nexigon.ota.check`. It reports its progress in the `dev.nexigon.ota.status` property. An update takes a few minutes:
 
