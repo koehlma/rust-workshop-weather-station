@@ -11,7 +11,7 @@ description = "Build the bootloader and the firmware of a crate into `target/<cr
 run = "scripts/build.sh"
 
 [tasks.release]
-description = "Publish the firmware of a crate built last as a version of a package, for instance, `mise run release weather-station default/rp-test`."
+description = "Publish the firmware of a crate built last as a version of a package, for instance, `mise run release weather-station default/rp-sensors`."
 run = "scripts/release.sh"
 
 [tasks."generate:api"]

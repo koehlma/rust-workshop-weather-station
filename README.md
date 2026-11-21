@@ -144,7 +144,7 @@ NEXIGON_DEPLOYMENT_TOKEN = "deployment_..."
 WIFI_SSID = "..."
 WIFI_PASSWORD = "..."
 # Version paths from which the devices install updates.
-WEATHER_STATION_UPDATE_PATH = "default/rp-test/latest"
+WEATHER_STATION_UPDATE_PATH = "default/rp-sensors/latest"
 TOUCH_DISPLAY_UPDATE_PATH = "default/rp-display/latest"
 # Only needed for releases.
 NEXIGON_ORG_TOKEN = "org_sk_..."
@@ -154,16 +154,16 @@ The firmware embeds this configuration, its identity, and the public release key
 
 ### Release an Update
 
-Each kind of device has its own package, so that a device only installs its own firmware: `rp-test` for the weather station and `rp-display` for the touch display. Build and publish a new version:
+Each kind of device has its own package, so that a device only installs its own firmware: `rp-sensors` for the weather station and `rp-display` for the touch display. Build and publish a new version:
 
 ```sh
 mise run build weather-station
-mise run release weather-station default/rp-test
+mise run release weather-station default/rp-sensors
 ```
 
 The release uploads the firmware and its signature as a new version of the package, tags it with the firmware version, and moves the tag `latest` to it. Devices that follow `latest` install it within 5 minutes, or right away with the command `nexigon.ota.check`. An update takes a few minutes.
 
-The `dev.nexigon.ota.config` property of a device overrides its version path. For instance, `{"path": "default/rp-test/20261120-163751"}` pins a version, and `{"hold": true}` holds updates. The device reports its progress in the `dev.nexigon.ota.status` property.
+The `dev.nexigon.ota.config` property of a device overrides its version path. For instance, `{"path": "default/rp-sensors/20261120-163751"}` pins a version, and `{"hold": true}` holds updates. The device reports its progress in the `dev.nexigon.ota.status` property.
 
 ### How Updates Work
 

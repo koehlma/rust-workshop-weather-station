@@ -14,7 +14,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 if [ $# -ne 2 ] || [[ "$2" != */* ]]; then
-    echo "usage: $0 CRATE REPOSITORY/PACKAGE, for instance, $0 weather-station default/rp-test" >&2
+    echo "usage: $0 CRATE REPOSITORY/PACKAGE, for instance, $0 weather-station default/rp-sensors" >&2
     exit 1
 fi
 out="target/$1"

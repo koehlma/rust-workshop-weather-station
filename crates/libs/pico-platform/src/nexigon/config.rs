@@ -27,7 +27,7 @@ pub struct Config {
     pub firmware_version: &'static str,
     /// Version path from which the device installs updates unless the
     /// `dev.nexigon.ota.config` property names another, for instance,
-    /// `default/rp-test/latest`.
+    /// `default/rp-sensors/latest`.
     pub update_path: Option<&'static str>,
 }
 
