@@ -5,7 +5,9 @@
 //! synchronizes the clock with SNTP, and connects to Nexigon Hub over TLS with
 //! the device certificate. It learns the device ID with `actor_GetActor`,
 //! describes the commands of the device, and checks for updates. Every 30
-//! seconds, it publishes a heartbeat event and the event of the application.
+//! seconds, it reads the configuration of the application, publishes a
+//! heartbeat event with the IP address of the device, and publishes the event
+//! of the application.
 //!
 //! A firmware creates its [`Config`] with
 //! [`nexigon_config!`](crate::nexigon_config). The module uses
@@ -47,11 +49,18 @@ pub use sidex_embedded;
 use sidex_embedded::Encode;
 use sidex_embedded::EncodeError;
 use sidex_embedded::json::Writer;
+use sidex_embedded::types::Json;
+use sidex_embedded::types::Str;
 use static_cell::StaticCell;
 
 use self::api::actor::Actor;
 use self::api::actor::GetActorAction;
 use self::api::actor::GetActorOutput;
+use self::api::devices::DeviceId;
+use self::api::devices::GetDevicePropertyAction;
+use self::api::devices::GetDevicePropertyOutput;
+pub use self::clock::now;
+pub use self::clock::unix_seconds;
 pub use self::config::Config;
 use self::firmware::Firmware;
 pub use self::network::WifiPeripherals;
@@ -81,6 +90,20 @@ pub trait Application {
 
     /// Category of the events of the application.
     const EVENT_CATEGORY: &'static str;
+
+    /// Device property with the configuration of the application, if any.
+    ///
+    /// The device reads the property before every heartbeat and passes its
+    /// value to [`configure`](Self::configure).
+    const CONFIG_PROPERTY: Option<&'static str> = None;
+
+    /// Starts the parts of the application that use the network, once the
+    /// device has joined it.
+    fn start(&mut self, _spawner: Spawner, _stack: Stack<'static>) {}
+
+    /// Applies the value of [`CONFIG_PROPERTY`](Self::CONFIG_PROPERTY), which
+    /// is `None` if the property does not exist.
+    fn configure(&mut self, _config: Option<Json<'_>>) {}
 
     /// Returns the event to publish with the next heartbeat, if any.
     fn next_event(&mut self) -> impl Future<Output = Option<Self::Event>>;
@@ -112,7 +135,7 @@ pub async fn run<A: Application>(
     spawner: Spawner,
     config: &'static Config,
     peripherals: Peripherals,
-    application: A,
+    mut application: A,
 ) -> ! {
     let firmware = Firmware::new(peripherals.flash, config.release_key);
     if firmware.awaits_commit() {
@@ -121,6 +144,7 @@ pub async fn run<A: Application>(
     spawner.spawn(firmware::commit_deadline_task().unwrap());
 
     let (stack, control) = network::start(spawner, peripherals.wifi, config).await;
+    application.start(spawner, stack);
 
     static TLS_BUFFERS: StaticCell<tls::Buffers> = StaticCell::new();
     static DOWNLOAD_BUFFERS: StaticCell<tls::Buffers> = StaticCell::new();
@@ -241,11 +265,25 @@ impl<A: Application> Runtime<A> {
                     next_update_check = Instant::now();
                 }
             } else if Instant::now() >= next_heartbeat {
+                if let Some(property) = A::CONFIG_PROPERTY {
+                    self.configure(session, &device_id, property).await?;
+                }
                 let event = self.application.next_event().await;
                 let extra = event
                     .as_ref()
                     .map(|event| (A::EVENT_CATEGORY, event as &dyn Encode));
-                events::publish(session, &device_id, self.config.firmware_version, extra).await?;
+                let address = self
+                    .stack
+                    .config_v4()
+                    .map(|config| config.address.address());
+                events::publish(
+                    session,
+                    &device_id,
+                    self.config.firmware_version,
+                    address,
+                    extra,
+                )
+                .await?;
                 if extra.is_some() {
                     info!("published heartbeat and {} event", A::EVENT_CATEGORY);
                 } else {
@@ -254,5 +292,29 @@ impl<A: Application> Runtime<A> {
                 next_heartbeat += EVENT_INTERVAL;
             }
         }
+    }
+
+    /// Reads the configuration of the application from `property` and
+    /// applies it.
+    async fn configure(
+        &mut self,
+        session: &mut hub::Session<'_, tls::Connection<'_>>,
+        device_id: &str,
+        property: &str,
+    ) -> Result<(), hub::Error> {
+        let action = GetDevicePropertyAction {
+            device_id: DeviceId(Str::new(device_id)),
+            name: Str::new(property),
+        };
+        let output = session
+            .invoke::<GetDevicePropertyOutput>("devices_GetProperty", &action)
+            .await?;
+        match output {
+            GetDevicePropertyOutput::NotFound => self.application.configure(None),
+            GetDevicePropertyOutput::Found(property) => {
+                self.application.configure(Some(property.value))
+            }
+        }
+        Ok(())
     }
 }

@@ -8,14 +8,16 @@ publish.workspace = true
 [features]
 default = ["nexigon"]
 # Connection to Nexigon Hub: events, commands, and updates. See `src/nexigon.rs`.
-nexigon = ["pico-platform/nexigon"]
+nexigon = ["pico-platform/nexigon", "dep:embassy-net", "dep:embassy-sync"]
 
 [dependencies]
 bme280.workspace = true
 cortex-m.workspace = true
 cortex-m-rt.workspace = true
 embassy-executor.workspace = true
+embassy-net = { workspace = true, optional = true }
 embassy-rp = { workspace = true, features = ["time-driver"] }
+embassy-sync = { workspace = true, optional = true }
 embassy-time.workspace = true
 embedded-graphics.workspace = true
 embedded-hal-bus.workspace = true

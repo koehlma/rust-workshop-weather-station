@@ -2,12 +2,12 @@
 
 Firmware for two devices built on the Raspberry Pi Pico W (RP2040). It is written in Rust with [Embassy](https://embassy.dev) and runs without an operating system or an allocator.
 
-| Crate                         | Device                                                                                             |
-| ----------------------------- | -------------------------------------------------------------------------------------------------- |
-| `crates/apps/weather-station` | Weather station that measures temperature, humidity, UV radiation, and air pressure and shows them |
-| `crates/apps/touch-display`   | Waveshare Pico-ResTouch-LCD-2.8 that shows a placeholder text                                      |
+| Crate                         | Device                                                                                                  |
+| ----------------------------- | ------------------------------------------------------------------------------------------------------- |
+| `crates/apps/weather-station` | Weather station that measures temperature, humidity, UV radiation, and air pressure and shows them      |
+| `crates/apps/touch-display`   | Waveshare Pico-ResTouch-LCD-2.8 that stores the measurements on a microSD card and shows the latest one |
 
-Both devices connect to Nexigon Hub, each with its own identity. Every 30 seconds, a device publishes a heartbeat event, and the weather station also publishes its measurement. The devices run commands that Nexigon Hub sends and install updates that Nexigon Hub rolls out. A bootloader swaps in updates and rolls back those that fail. The weather station can also be built without Nexigon, in which case it logs its measurements to the USB serial port.
+Both devices connect to Nexigon Hub, each with its own identity. Every 30 seconds, the weather station measures and sends the measurement directly to the touch display over the local network. Every 30 seconds, a device publishes a heartbeat event, the weather station its latest measurement, and the touch display the number of stored measurements. Device properties in Nexigon Hub configure the IP addresses of the devices. The devices run commands that Nexigon Hub sends and install updates that Nexigon Hub rolls out. A bootloader swaps in updates and rolls back those that fail. The weather station can also be built without Nexigon, in which case it logs its measurements to the USB serial port.
 
 Each device holds one persistent connection to Nexigon Hub, which authenticates it with a deployment token, a device fingerprint, and a client certificate. On its first connection, Nexigon Hub registers the device in the project of the deployment token.
 
@@ -30,7 +30,9 @@ The weather station needs:
 - A Joy-IT SEN-UV01 UV sensor connected to GP26, the first analog input. Connect its VCC to 3V3 (OUT), GND to GND, and OUT to GP26. Power it from 3.3 V, the most that the analog inputs of the Pico W accept.
 - A BMP280 pressure sensor, for instance, the Joy-IT KY-052, connected to I2C0. Connect its +V to 3V3 (OUT), GND to GND, SDA to GP4, and SCL to GP5. Tie CSB to 3V3, which selects I2C, and SDO to 3V3, which selects the address 0x77.
 
-The touch display needs a Waveshare Pico-ResTouch-LCD-2.8. Its display is an ST7789 with 320 × 240 pixels on SPI1, which it shares with its XPT2046 touch controller and its microSD slot. Plug in the Pico W with its USB port on the side of the microSD slot.
+The touch display needs a Waveshare Pico-ResTouch-LCD-2.8 and a microSD card with a FAT16 or FAT32 file system, the file system of most cards up to 32 GB. Its display is an ST7789 with 320 × 240 pixels on SPI1, which it shares with its XPT2046 touch controller and its microSD slot. Plug in the Pico W with its USB port on the side of the microSD slot.
+
+To store measurements, both devices need Nexigon and the same Wi-Fi network.
 
 ## Configure Nexigon
 
@@ -106,7 +108,7 @@ measured 21.0 °C, 45 % humidity, UV index 0.2 (0.021 V), 1013.2 hPa
 published heartbeat and environment event
 ```
 
-Without Nexigon, only the measurements follow the first line. The touch display logs `published heartbeat` instead of the measurements. The events appear in the event log of the device in Nexigon Hub.
+Without Nexigon, only the measurements follow the first line. The touch display logs `published heartbeat and storage event` instead of the measurements. The events appear in the event log of the device in Nexigon Hub.
 
 ## Weather Station
 
@@ -114,10 +116,12 @@ The display of the explorer board shows the latest temperature, humidity, UV ind
 
 With Nexigon, the weather station publishes two events every 30 seconds:
 
-| Category      | Body                                                          |
-| ------------- | ------------------------------------------------------------- |
-| `heartbeat`   | `{"uptimeSeconds": 42, "firmwareVersion": "20261120-163751"}` |
-| `environment` | Measurement of the sensors                                    |
+| Category      | Body                                                                                     |
+| ------------- | ---------------------------------------------------------------------------------------- |
+| `heartbeat`   | `{"uptimeSeconds": 42, "firmwareVersion": "20261120-163751", "ipAddress": "10.10.2.51"}` |
+| `environment` | Latest measurement of the sensors                                                        |
+
+Both devices publish the same heartbeat. Its `ipAddress` is the address of the device in the Wi-Fi network.
 
 The body of an `environment` event looks as follows:
 
@@ -141,22 +145,71 @@ The body of an `environment` event looks as follows:
 
 `uvIndex` is `uvVolts` divided by 0.1 V. This approximation suits sensors with the GUVA-S12SD photodiode but is not calibrated. The BMP280 also measures the temperature, which the device does not publish because the DHT11 already does. The pressure is the absolute pressure at the height of the device, which is lower than the pressure at sea level that weather reports quote.
 
-If a sensor fails, the device logs a warning and leaves out its fields. If all fail, it publishes only the heartbeat. The DHT11 and the BMP280 fail when they do not answer, for instance, because none is connected. A missing UV sensor goes unnoticed, because the open analog input yields arbitrary voltages.
+If a sensor fails, the device logs a warning and leaves out its fields. If all fail, it publishes only the heartbeat and sends nothing to the touch display. The DHT11 and the BMP280 fail when they do not answer, for instance, because none is connected. A missing UV sensor goes unnoticed, because the open analog input yields arbitrary voltages.
 
 ## Touch Display
 
-The touch display shows "Updated through Nexigon!" and the version of its firmware. It publishes only the heartbeat. Its display runs in landscape, as in the example code of Waveshare. The firmware keeps the touch controller and the microSD slot deselected and does not use them yet.
+The touch display receives the measurements of the weather station, stores them on the microSD card, and shows the latest one. The weather station sends every measurement as a UDP datagram to port 4242 of the touch display. The datagram holds the body of an `environment` event. The weather station measures and sends even while it is not connected to Nexigon Hub.
 
-| Signal                   | GPIO |
-| ------------------------ | ---- |
-| Display data or command  | GP8  |
-| Display chip select      | GP9  |
-| SPI1 clock               | GP10 |
-| SPI1 data to the display | GP11 |
-| Display backlight        | GP13 |
-| Display reset            | GP15 |
-| Touch chip select        | GP16 |
-| microSD chip select      | GP22 |
+Two device properties configure the IP addresses. Each device reads its property before every heartbeat, so a change takes effect within 30 seconds:
+
+| Device          | Property                 | Value                              |
+| --------------- | ------------------------ | ---------------------------------- |
+| Weather station | `weather-station.config` | `{"displayAddress": "10.10.2.28"}` |
+| Touch display   | `touch-display.config`   | `{"sensorAddress": "10.10.2.51"}`  |
+
+`displayAddress` is the address to which the weather station sends its measurements. `sensorAddress` is the only address from which the touch display accepts measurements. The heartbeats of the devices report their addresses. Set the properties in Nexigon Hub, for instance, with the Nexigon CLI:
+
+```sh
+nexigon-cli devices properties set --protected true <device-id> weather-station.config '{"displayAddress": "10.10.2.28"}'
+nexigon-cli devices properties set --protected true <device-id> touch-display.config '{"sensorAddress": "10.10.2.51"}'
+```
+
+Only Nexigon Hub can change a protected property, not the device itself. Without its property, the weather station sends nothing, and the touch display rejects all datagrams.
+
+The touch display appends every accepted measurement to `WEATHER.LOG` in the root directory of the first partition of the card, one JSON object per line:
+
+```json
+{
+  "receivedAt": "2026-11-21T13:43:50Z",
+  "sender": "10.10.2.51:22972",
+  "measurement": {
+    "temperatureCelsius": 8.9,
+    "humidityPercent": 60.0,
+    "uvIndex": 0.2,
+    "uvVolts": 0.02,
+    "pressureHectopascals": 958.1
+  }
+}
+```
+
+`receivedAt` is missing while the clock of the touch display is not synchronized. The touch display closes the file after every line, so the card can be removed between measurements. After a failure, for instance, because no card is inserted, it starts the card again with the next measurement.
+
+With every heartbeat, the touch display publishes a `storage` event with counts since its start:
+
+```json
+{ "storedMeasurements": 4, "rejectedDatagrams": 2, "failedWrites": 0 }
+```
+
+| Field                | Count                                                   |
+| -------------------- | ------------------------------------------------------- |
+| `storedMeasurements` | Measurements stored on the card                         |
+| `rejectedDatagrams`  | Datagrams from another address or without a measurement |
+| `failedWrites`       | Measurements that could not be stored on the card       |
+
+The display runs in landscape, as in the example code of Waveshare. The firmware keeps the touch controller deselected and does not use it.
+
+| Signal                  | GPIO |
+| ----------------------- | ---- |
+| Display data or command | GP8  |
+| Display chip select     | GP9  |
+| SPI1 clock              | GP10 |
+| SPI1 data out           | GP11 |
+| SPI1 data in            | GP12 |
+| Display backlight       | GP13 |
+| Display reset           | GP15 |
+| Touch chip select       | GP16 |
+| microSD chip select     | GP22 |
 
 ## Commands
 
@@ -210,21 +263,28 @@ The repository is a Cargo workspace. All firmware crates share the bootloader, t
 | `crates/libs/pico-platform`   | Watchdog, USB logger, and, with the `nexigon` feature, Nexigon Hub          |
 | `crates/libs/pico-build`      | Helpers for the build scripts of the firmware crates, which run on the host |
 
-Everything that concerns Nexigon is in `crates/libs/pico-platform/src/nexigon/`, which only the `nexigon` feature of `pico-platform` compiles, together with its dependencies. Its entry point `nexigon::run` takes the configuration of the device, the peripherals that the connection needs, and an `Application`, which provides the event that the device publishes with every heartbeat. A firmware creates its configuration with `pico_platform::nexigon_config!()`, which embeds what `pico_build::embed_nexigon_config` checks and the identity in `identity/` of the crate.
+Everything that concerns Nexigon is in `crates/libs/pico-platform/src/nexigon/`, which only the `nexigon` feature of `pico-platform` compiles, together with its dependencies. Its entry point `nexigon::run` takes the configuration of the device, the peripherals that the connection needs, and an `Application`. The application starts its own tasks once the device has joined the Wi-Fi network, receives the value of its configuration property, and provides the event that the device publishes with every heartbeat. A firmware creates its configuration with `pico_platform::nexigon_config!()`, which embeds what `pico_build::embed_nexigon_config` checks and the identity in `identity/` of the crate.
 
 The weather station enables the `nexigon` feature through its own feature of the same name. Without it, `src/standalone.rs` logs the measurements instead. Both variants use the same bootloader and flash layout, so a device can switch between them when flashed over USB.
 
-| File in `crates/apps/weather-station/src/` | Purpose                                                     |
-| ------------------------------------------ | ----------------------------------------------------------- |
-| `main.rs`                                  | Start of the firmware, which hands the station to a variant |
-| `station.rs`                               | Station, which measures and shows the measurements          |
-| `sensors.rs`                               | Measurements of all sensors                                 |
-| `dht11.rs`                                 | Readings of the DHT11 sensor                                |
-| `uv.rs`                                    | Readings of the UV sensor                                   |
-| `bmp280.rs`                                | Readings of the BMP280 sensor                               |
-| `display.rs`                               | Display of the measurements on the TFT                      |
-| `nexigon.rs`                               | Environment events, with the `nexigon` feature              |
-| `standalone.rs`                            | Logging of measurements without Nexigon                     |
+| File in `crates/apps/weather-station/src/` | Purpose                                                                        |
+| ------------------------------------------ | ------------------------------------------------------------------------------ |
+| `main.rs`                                  | Start of the firmware, which hands the station to a variant                    |
+| `station.rs`                               | Station, which measures and shows the measurements                             |
+| `sensors.rs`                               | Measurements of all sensors                                                    |
+| `dht11.rs`                                 | Readings of the DHT11 sensor                                                   |
+| `uv.rs`                                    | Readings of the UV sensor                                                      |
+| `bmp280.rs`                                | Readings of the BMP280 sensor                                                  |
+| `display.rs`                               | Display of the measurements on the TFT                                         |
+| `nexigon.rs`                               | Measurements for Nexigon Hub and the touch display, with the `nexigon` feature |
+| `standalone.rs`                            | Logging of measurements without Nexigon                                        |
+
+| File in `crates/apps/touch-display/src/` | Purpose                                                  |
+| ---------------------------------------- | -------------------------------------------------------- |
+| `main.rs`                                | Start of the firmware, configuration, and storage events |
+| `receiver.rs`                            | Reception of measurements, which it stores and shows     |
+| `storage.rs`                             | File on the microSD card                                 |
+| `display.rs`                             | Display of the latest measurement                        |
 
 ### Connection to Nexigon Hub
 
@@ -273,7 +333,7 @@ The types of the actions, command invocations, properties, and results in `gener
 
 ## Limitations
 
-The following limitations concern the connection to Nexigon Hub.
+The following limitations concern the connection to Nexigon Hub and between the devices.
 
 - The private key of the device is stored in flash, from which anyone with physical access can read it. The RP2040 has no secure key storage.
 - The RP2040 has no true random number generator. The firmware uses its ring oscillator, the best source of entropy available.
@@ -281,6 +341,7 @@ The following limitations concern the connection to Nexigon Hub.
 - The firmware implements a basic version of the OTA update contract. Besides the version path, it supports `hold` and `asset`. It does not support maintenance windows, spreading updates over time, or checkpoint versions. It does not retry a failed update on its own: the update stays failed until the configuration changes or the failure count in the status is cleared.
 - The device offers commands only. It rejects other channels, such as those for terminals and port forwarding.
 - Command invocations must fit into 1 KiB and responses to actions into 4 KiB.
+- The touch display identifies the weather station by its IP address only, so any device in the network can send it measurements from that address. Datagrams are not acknowledged, so measurements are lost while the touch display is unreachable.
 - Reading the flash with a debugger while the firmware writes an update corrupts the update. The device then hangs until the watchdog resets it, and the update fails as interrupted.
 - `vendor/embedded-tls/` holds a patched version of `embedded-tls`. See `vendor/README.md`.
 

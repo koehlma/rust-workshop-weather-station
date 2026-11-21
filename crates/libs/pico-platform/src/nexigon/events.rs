@@ -4,6 +4,7 @@
 //! an event of the application, for instance, with the readings of sensors.
 
 use core::fmt::Write as _;
+use core::net::Ipv4Addr;
 
 use embassy_rp::clocks::RoscRng;
 use embassy_time::Instant;
@@ -26,12 +27,14 @@ use super::clock;
 use super::hub;
 use super::tls;
 
-/// Publishes a heartbeat event and, if there is one, the event of the
-/// application in `extra`, given by its category and its body.
+/// Publishes a heartbeat event with the IP `address` of the device and, if
+/// there is one, the event of the application in `extra`, given by its
+/// category and its body.
 pub async fn publish(
     session: &mut hub::Session<'_, tls::Connection<'_>>,
     device_id: &str,
     firmware_version: &str,
+    address: Option<Ipv4Addr>,
     extra: Option<(&str, &dyn Encode)>,
 ) -> Result<(), hub::Error> {
     let now = clock::now().expect("the clock is synchronized before connecting");
@@ -39,6 +42,7 @@ pub async fn publish(
     let heartbeat = Heartbeat {
         uptime_seconds: Instant::now().as_secs(),
         firmware_version,
+        address,
     };
     let extra_id = event_id(now);
     let events: heapless::Vec<DeviceEvent<'_>, 2> =
@@ -105,6 +109,7 @@ fn event_id(now: Timestamp) -> heapless::String<32> {
 struct Heartbeat<'a> {
     uptime_seconds: u64,
     firmware_version: &'a str,
+    address: Option<Ipv4Addr>,
 }
 
 impl Encode for Heartbeat<'_> {
@@ -112,6 +117,11 @@ impl Encode for Heartbeat<'_> {
         let mut object = writer.object()?;
         self.uptime_seconds.encode(object.field("uptimeSeconds")?)?;
         Str::new(self.firmware_version).encode(object.field("firmwareVersion")?)?;
+        if let Some(address) = self.address {
+            let mut text = heapless::String::<15>::new();
+            write!(text, "{address}").expect("IPv4 addresses have at most 15 bytes");
+            Str::new(&text).encode(object.field("ipAddress")?)?;
+        }
         object.end()
     }
 }

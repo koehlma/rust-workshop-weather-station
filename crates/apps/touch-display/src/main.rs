@@ -1,32 +1,73 @@
-//! Firmware of a Raspberry Pi Pico W on a Waveshare Pico-ResTouch-LCD-2.8.
+//! Firmware of a Raspberry Pi Pico W on a Waveshare Pico-ResTouch-LCD-2.8,
+//! which stores the measurements of the weather station on a microSD card.
 //!
-//! The firmware shows a placeholder text on the [`display`] and connects the
-//! device to Nexigon Hub with its own identity in `identity/`. It publishes a
-//! heartbeat every 30 seconds, runs commands, and installs updates through
-//! `pico_platform::nexigon`. Logs go to the USB serial port.
+//! The [`receiver`] receives the measurements of the weather station over
+//! UDP, appends them to a file on the microSD card through [`storage`], and
+//! shows the latest one on the [`display`]. The display, the microSD slot, and
+//! the touch controller share SPI1.
+//!
+//! The firmware connects the device to Nexigon Hub with its own identity in
+//! `identity/` through `pico_platform::nexigon`. It runs commands, installs
+//! updates, and publishes a heartbeat and a storage event every 30 seconds.
+//! The device property `touch-display.config` configures the IP address of
+//! the weather station:
+//!
+//! ```json
+//! { "sensorAddress": "10.10.2.30" }
+//! ```
+//!
+//! Logs go to the USB serial port.
 
 #![no_std]
 #![no_main]
 
 mod display;
+mod receiver;
+mod storage;
+
+use core::cell::RefCell;
+use core::net::Ipv4Addr;
 
 use embassy_executor::Spawner;
+use embassy_net::Stack;
 use embassy_rp::bind_interrupts;
+use embassy_rp::gpio::Level;
+use embassy_rp::gpio::Output;
+use embassy_rp::peripherals::SPI1;
 use embassy_rp::peripherals::USB;
+use embassy_rp::spi;
+use embassy_rp::spi::Spi;
 use embassy_rp::usb;
 use embassy_rp::watchdog::Watchdog;
+use embassy_sync::blocking_mutex::Mutex;
+use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 use embassy_time::Timer;
 use log::info;
+use log::warn;
 use panic_reset as _;
 use pico_platform::logger;
 use pico_platform::nexigon;
+use pico_platform::nexigon::Application;
 use pico_platform::nexigon::Config;
+use pico_platform::nexigon::sidex_embedded::Decode;
+use pico_platform::nexigon::sidex_embedded::DecodeError;
+use pico_platform::nexigon::sidex_embedded::Encode;
+use pico_platform::nexigon::sidex_embedded::EncodeError;
+use pico_platform::nexigon::sidex_embedded::json::Reader;
+use pico_platform::nexigon::sidex_embedded::json::Writer;
+use pico_platform::nexigon::sidex_embedded::types::Json;
+use pico_platform::nexigon::sidex_embedded::types::Str;
 use pico_platform::watchdog;
+use static_cell::StaticCell;
 
 use crate::display::Display;
+use crate::storage::Storage;
 
 /// Configuration and identity of the device.
 static CONFIG: Config = pico_platform::nexigon_config!();
+
+/// SPI1, which the display, the microSD slot, and the touch controller share.
+type Bus = Mutex<NoopRawMutex, RefCell<Spi<'static, SPI1, spi::Blocking>>>;
 
 bind_interrupts!(struct Irqs {
     USBCTRL_IRQ => usb::InterruptHandler<USB>;
@@ -43,20 +84,30 @@ async fn main(spawner: Spawner) {
     Timer::after_secs(3).await;
     info!("starting firmware {}", CONFIG.firmware_version);
 
-    let mut display = Display::new(
+    // Deselect the touch controller and the microSD card before using the
+    // bus. The touch controller stays deselected, because `main` never
+    // returns.
+    let _touch_chip_select = Output::new(p.PIN_16, Level::High);
+    let sd_chip_select = Output::new(p.PIN_22, Level::High);
+    static BUS: StaticCell<Bus> = StaticCell::new();
+    let bus = BUS.init(Mutex::new(RefCell::new(Spi::new_blocking(
         p.SPI1,
+        p.PIN_10,
+        p.PIN_11,
+        p.PIN_12,
+        spi::Config::default(),
+    ))));
+    let display = Display::new(
+        bus,
         display::Pins {
-            clock: p.PIN_10,
-            data: p.PIN_11,
             chip_select: p.PIN_9,
             data_command: p.PIN_8,
             reset: p.PIN_15,
             backlight: p.PIN_13,
-            touch_chip_select: p.PIN_16,
-            sd_chip_select: p.PIN_22,
         },
+        CONFIG.firmware_version,
     );
-    display.show_placeholder(CONFIG.firmware_version);
+    let storage = Storage::new(bus, sd_chip_select);
 
     nexigon::run(
         spawner,
@@ -72,7 +123,86 @@ async fn main(spawner: Spawner) {
                 dma: p.DMA_CH0,
             },
         },
-        (),
+        TouchDisplay {
+            parts: Some((display, storage)),
+        },
     )
     .await
+}
+
+/// Application of the device.
+struct TouchDisplay {
+    /// Display and storage, until [`receiver::task`] takes them.
+    parts: Option<(Display, Storage)>,
+}
+
+impl Application for TouchDisplay {
+    type Event = StorageEvent;
+
+    const EVENT_CATEGORY: &'static str = "storage";
+
+    const CONFIG_PROPERTY: Option<&'static str> = Some("touch-display.config");
+
+    fn start(&mut self, spawner: Spawner, stack: Stack<'static>) {
+        let (display, storage) = self.parts.take().expect("the application starts once");
+        spawner.spawn(receiver::task(stack, display, storage).unwrap());
+    }
+
+    fn configure(&mut self, config: Option<Json<'_>>) {
+        let address = config.and_then(|config| {
+            let address = config
+                .decode::<DisplayConfig>()
+                .ok()
+                .map(|config| config.sensor_address.as_ref().map(parse_address));
+            match address {
+                Some(Some(Some(address))) => Some(address),
+                Some(None) => None,
+                _ => {
+                    warn!("invalid configuration: {config:?}");
+                    None
+                }
+            }
+        });
+        receiver::set_sensor_address(address);
+    }
+
+    async fn next_event(&mut self) -> Option<StorageEvent> {
+        Some(StorageEvent(receiver::counts()))
+    }
+}
+
+/// Parses an IPv4 address, returning `None` if it is invalid.
+fn parse_address(address: &Str<'_>) -> Option<Ipv4Addr> {
+    address.as_str()?.parse().ok()
+}
+
+/// Configuration of the device.
+struct DisplayConfig<'a> {
+    /// IP address of the weather station.
+    sensor_address: Option<Str<'a>>,
+}
+
+impl<'a> Decode<'a> for DisplayConfig<'a> {
+    const IS_RECORD: bool = true;
+
+    fn decode(reader: &mut Reader<'a>) -> Result<Self, DecodeError> {
+        let fields = reader.record(&[&["sensorAddress"]])?;
+        Ok(Self {
+            sensor_address: fields.optional(0)?,
+        })
+    }
+}
+
+/// Body of storage events, with the counts of the measurements since the
+/// start.
+struct StorageEvent(receiver::Counts);
+
+impl Encode for StorageEvent {
+    fn encode(&self, writer: &mut Writer<'_>) -> Result<(), EncodeError> {
+        let mut object = writer.object()?;
+        self.0.stored.encode(object.field("storedMeasurements")?)?;
+        self.0.rejected.encode(object.field("rejectedDatagrams")?)?;
+        self.0.failed.encode(object.field("failedWrites")?)?;
+        object.end()
+    }
 }

@@ -4,9 +4,10 @@
 //!
 //! Every 30 seconds, the [`station`] measures the temperature, humidity, UV
 //! radiation, and air pressure and shows them on the display. With the
-//! `nexigon` feature, [`nexigon`] connects the device to Nexigon Hub, which
-//! receives the measurements as events, runs commands, and rolls out updates.
-//! Without it, [`standalone`] logs the measurements. Logs go to the USB serial
+//! `nexigon` feature, [`nexigon`] sends the measurements to the touch display
+//! and connects the device to Nexigon Hub, which receives the measurements as
+//! events, configures the address of the touch display, runs commands, and
+//! rolls out updates. Without it, [`standalone`] logs the measurements. Logs go to the USB serial
 //! port.
 
 #![no_std]
