@@ -1,62 +1,42 @@
 # Weather Station on the Raspberry Pi Pico W
 
-Firmware for two devices built on the Raspberry Pi Pico W (RP2040). It is written in Rust with [Embassy](https://embassy.dev) and runs without an operating system or an allocator.
+Firmware for two devices built on the Raspberry Pi Pico W (RP2040), written in Rust with [Embassy](https://embassy.dev):
 
-- **Weather station**, in `crates/apps/weather-station`, measures the temperature, the humidity, the UV radiation, and the air pressure and shows them on its display.
-- **Touch display**, in `crates/apps/touch-display`, is a Waveshare Pico-ResTouch-LCD-2.8 that stores the measurements on a microSD card, plots them, and animates the weather.
+- **Weather station**, in `crates/apps/weather-station`, measures the temperature, the humidity, the UV radiation, and the air pressure every 30 seconds and shows them on its display.
+- **Touch display**, in `crates/apps/touch-display`, is a Waveshare Pico-ResTouch-LCD-2.8 that receives the measurements over the local network, stores them on a microSD card, plots them, and animates the weather.
 
-Every 30 seconds, the weather station measures and sends the measurement directly to the touch display over the local network. Both devices install updates of their firmware over the air, so that they can be improved and fixed wherever they are installed. See [Over-the-Air Updates](#over-the-air-updates).
+Both devices install new firmware [over the air](#over-the-air-updates), so that they can be fixed and improved wherever they are installed.
+
+![The touch display on a desk, plotting the humidity of the last hour](docs/touch-display-photo.jpg)
 
 ![Screens of the touch display with mock data: plots of the temperature over 24 hours, the humidity over 1 hour, the UV index over 7 days, and the air pressure over 30 days, and the weather scene for sunny, cloudy, rainy, and snowy weather](docs/touch-display.png)
 
-The screens of the touch display with mock data: plots of the stored measurements and the animated weather scene.
+## Hardware
 
-## Requirements
+- A Raspberry Pi Pico W for each device and a 2.4 GHz Wi-Fi network, the only kind that the Pico W joins.
+- For the weather station, a Joy-IT explorer board (RB-P-XPLR). The firmware uses its DHT11 sensor on GP0 and its 1.8" display on SPI0. Turn on their switches.
+- A Joy-IT SEN-UV01 UV sensor: VCC to 3V3 (OUT), GND to GND, and OUT to GP26.
+- A BMP280 pressure sensor, for instance, the Joy-IT KY-052: +V to 3V3 (OUT), GND to GND, SDA to GP4, and SCL to GP5. Tie CSB and SDO to 3V3, which select I2C and the address 0x77.
+- For the touch display, a Waveshare Pico-ResTouch-LCD-2.8 and a microSD card with a FAT16 or FAT32 file system, the file system of most cards up to 32 GB. Plug in the Pico W with its USB port on the side of the microSD slot.
 
-- A Raspberry Pi Pico W for each device.
-- A 2.4 GHz Wi-Fi network, the only kind that the Wi-Fi chip of the Pico W joins.
-- [Rust](https://rustup.rs). `rust-toolchain.toml` selects the toolchain and installs the `thumbv6m-none-eabi` target and `llvm-objcopy`.
-- `python3`, which creates the UF2 files.
-- `openssl`, which creates keys and signs updates.
-- Optionally, [`mise`](https://mise.jdx.dev) to run the tasks in `mise.toml`.
+![The weather station on the explorer board, with the Pico W, the sensors wired on the breadboard, and a Raspberry Pi Debug Probe](docs/weather-station-wiring.jpg)
 
-The weather station needs:
+## Build and Flash
 
-- A Joy-IT explorer board (RB-P-XPLR) for the Pico W. The firmware uses its DHT11 sensor on GP0 and its 1.8" display, an ST7735 on SPI0. Turn on their switches on the board.
-- A Joy-IT SEN-UV01 UV sensor connected to GP26, the first analog input. Connect its VCC to 3V3 (OUT), GND to GND, and OUT to GP26. Power it from 3.3 V, the most that the analog inputs of the Pico W accept.
-- A BMP280 pressure sensor, for instance, the Joy-IT KY-052, connected to I2C0. Connect its +V to 3V3 (OUT), GND to GND, SDA to GP4, and SCL to GP5. Tie CSB to 3V3, which selects I2C, and SDO to 3V3, which selects the address 0x77.
-
-The touch display needs a Waveshare Pico-ResTouch-LCD-2.8 and a microSD card with a FAT16 or FAT32 file system, the file system of most cards up to 32 GB. Its display is an ST7789 with 320 × 240 pixels on SPI1, which it shares with its XPT2046 touch controller and its microSD slot. Plug in the Pico W with its USB port on the side of the microSD slot.
-
-## Build and Flash the Firmware
-
-The firmware embeds its configuration when it is built. Before the first build, set up [over-the-air updates](#set-up-updates), which also configures the Wi-Fi network in `mise.local.toml`.
-
-Build the bootloader and the firmware of a crate:
+You need [Rust](https://rustup.rs), `python3`, `openssl`, and [`mise`](https://mise.jdx.dev). `rust-toolchain.toml` installs the target and tools that Rust needs. Before the first build, [set up updates](#set-up-updates), which also configures the Wi-Fi network.
 
 ```sh
 mise run build weather-station
 mise run build touch-display
 ```
 
-The build writes the UF2 file to `target/<crate>/<crate>.uf2`, for instance, `target/touch-display/touch-display.uf2`. The version of the firmware is the time of the build, for instance, `20261120-163751`. Set `FIRMWARE_VERSION` to choose another one.
+The build writes `target/<crate>/<crate>.uf2`. The version of the firmware is the time of the build, for instance, `20261120-163751`. The UF2 file contains the Wi-Fi password and the credentials of the device, so do not share it.
 
-The UF2 file contains the Wi-Fi password and the credentials of the device. Do not share it.
+To flash it, hold the BOOTSEL button while connecting the Pico W over USB and copy the UF2 file to the drive `RPI-RP2`. From then on, the device receives new versions over the air.
 
-To flash the bootloader and the firmware, hold the BOOTSEL button while connecting the Pico W over USB. It appears as a drive named `RPI-RP2`. Copy the UF2 file to the drive. The Pico W restarts with the new firmware. From then on, it receives new versions over the air.
+The firmware logs to the USB serial port, for instance, `/dev/ttyACM0`. Open it with a serial terminal such as `tio /dev/ttyACM0`.
 
-The firmware logs to a USB serial port, for instance, `/dev/ttyACM0` on Linux or `/dev/cu.usbmodem*` on macOS. Open it with a serial terminal, for instance, `tio /dev/ttyACM0`. The log of the weather station starts as follows:
-
-```text
-starting firmware 20261120-163751
-joining Wi-Fi network ...
-network is up: Some(192.168.1.23/24)
-synchronized clock: Some(2026-11-20T14:35:00Z)
-...
-measured 21.0 °C, 45 % humidity, UV index 0.2 (0.021 V), 1013.2 hPa
-```
-
-The weather station can also run on its own, without Wi-Fi, updates, or the touch display. It then logs its measurements to the USB serial port. This variant needs no configuration:
+The weather station can also run on its own, without Wi-Fi, updates, or the touch display, and only log its measurements. This variant needs no configuration:
 
 ```sh
 mise run build weather-station -- --no-default-features
@@ -64,9 +44,7 @@ mise run build weather-station -- --no-default-features
 
 ## Weather Station
 
-The display of the explorer board shows the latest temperature, humidity, UV index, and air pressure, with dashes for a sensor that failed.
-
-A measurement looks as follows:
+The weather station shows the latest values on its display, with dashes for a sensor that failed. A measurement looks as follows:
 
 ```json
 {
@@ -78,127 +56,84 @@ A measurement looks as follows:
 }
 ```
 
-Each field comes from one sensor:
-
-- `temperatureCelsius`: Temperature in degrees Celsius, from the DHT11.
-- `humidityPercent`: Relative humidity in percent, from the DHT11.
-- `uvIndex`: Approximate UV index, from the UV sensor.
-- `uvVolts`: Output voltage of the UV sensor.
-- `pressureHectopascals`: Air pressure in hectopascals, from the BMP280.
-
-`uvIndex` is `uvVolts` divided by 0.1 V. This approximation suits sensors with the GUVA-S12SD photodiode but is not calibrated. The BMP280 also measures the temperature, which the measurement leaves out because the DHT11 already provides it. The pressure is the absolute pressure at the height of the device, which is lower than the pressure at sea level that weather reports quote.
-
-If a sensor fails, the device logs a warning and leaves out its fields. If all fail, it sends nothing to the touch display. The DHT11 and the BMP280 fail when they do not answer, for instance, because none is connected. A missing UV sensor goes unnoticed, because the open analog input yields arbitrary voltages.
+The temperature and the humidity come from the DHT11 and the air pressure from the BMP280. The UV index is the voltage of the UV sensor divided by 0.1 V, an uncalibrated approximation. The pressure is the absolute pressure at the height of the device, lower than the pressure at sea level that weather reports quote. A sensor that fails is missing from the measurement. A missing UV sensor goes unnoticed, because the open analog input yields arbitrary voltages.
 
 ## Touch Display
 
-The touch display receives the measurements of the weather station, stores them on the microSD card, and shows the latest one with a plot of the stored measurements. The weather station sends every measurement as a UDP datagram to port 4242 of the touch display. The datagram holds the measurement, the time of the measurement in `measuredAt`, and a `sequence` number, which counts the datagrams since the start of the weather station. The weather station sends every measurement right away, without buffering it. The touch display shows every measurement as soon as it arrives.
+The weather station sends every measurement right away as a UDP datagram to port 4242 of the touch display, with the time of the measurement and a sequence number. The touch display accepts measurements only from the weather station. Both devices learn the address of the other one through a [remote configuration](#configure-and-monitor-the-devices).
 
-Each device needs the IP address of the other one: the weather station sends its measurements to `displayAddress`, and the touch display accepts measurements only from `sensorAddress`. Both are [configured remotely](#configure-and-monitor-the-devices), so that they can change without a new firmware.
+The display rotates through the plots of temperature, humidity, UV index, and air pressure for 10 seconds each and then the weather scene for 20 seconds:
 
-### Screen
+- A tap on a tile at the top plots its quantity.
+- A tap on a chip below the plot selects the interval: 1 hour, 3 hours, 6 hours, 24 hours, 7 days, or 30 days.
+- A tap on the plot shows the next page, and a tap on the weather scene returns to the plots.
+- After a tap, the page stays for a minute.
 
-The screen has four parts, from top to bottom:
-
-- **Tiles** with the latest temperature, humidity, UV index, and air pressure. Each quantity has its own color. The tile of the plotted quantity is highlighted in it. Values turn gray when no measurement has arrived for 2.5 minutes.
-- **Plot** of the plotted quantity, with its minimum, mean, and maximum in the interval above it and gridlines at round values.
-- **Chips** of the intervals: 1 hour, 3 hours, 6 hours, 24 hours, 7 days, and 30 days. The selected interval is filled.
-- **State** of the device, with a colored dot, and the version of the firmware.
-
-The display rotates through five pages: the plots of temperature, humidity, UV index, and air pressure for 10 seconds each, and then the [weather scene](#weather-scene) for 20 seconds. The plots cover the last 24 hours after a start. A tap on a tile plots its quantity, a tap on the plot shows the next page, and a tap on a chip selects its interval. A tap on the weather scene returns to the plots. After a tap, the page stays for a minute.
-
-The dot in the bottom left corner shows the state of the device:
+The line at the bottom shows the state of the device:
 
 - **Recording · updated 12 s ago**, green: Measurements arrive and are stored.
-- **Waiting for the weather station**, amber: No measurement has arrived since the start.
-- **No data for 3 min**, amber: The weather station has not sent a measurement for a while.
-- **Ignoring data from 10.10.2.99**, amber: Measurements arrive from another address than `sensorAddress`.
-- **No weather station configured**, amber: `sensorAddress` is not configured.
+- **Waiting for the weather station** or **No data for 3 min**, amber: No measurements arrive. Check the weather station and its configuration.
+- **Ignoring data from 10.10.2.99**, amber: Measurements arrive from another address than the configured one.
+- **No weather station configured**, amber: The address of the weather station is missing.
 - **SD card failed, check the card**, red: The card is missing or cannot be written.
-- **Reading 24 h from the SD card**, gray: The touch display reads the measurements of a newly selected interval.
 
-Each of the 288 columns of the plot summarizes the measurements of a bucket of the interval, for instance, 5 minutes of the last 24 hours. A band spans from their minimum to their maximum over an area that fades towards the bottom, and a line connects their means. Gaps of up to 2 minutes are interpolated, so that the plots of 1 and 3 hours stay continuous although their columns are shorter than the 30 seconds between two measurements. Longer gaps stay empty.
+The weather scene animates the latest measurement. The weather station measures neither clouds nor rain, so the scene maps what it measures to a picture:
 
-The touch display keeps the summaries of the interval in memory and adds every new measurement to them. When the interval changes, and after a restart once the clock is synchronized, it reads the measurements of the interval from the card.
+- The sun shines with a UV index of at least 1 and glows brighter the higher it is.
+- Clouds grow with the humidity and turn dark from 85 %.
+- Rain falls when the humidity is at least 90 % and the air pressure falls by at least 1 hPa over two to three hours, the classic barometric sign of worsening weather. At or below 1 °C, snow falls instead.
+- The sky is icy and the hills are snowy at or below 0 °C, and the sky is warm from 25 °C.
 
-The display draws each frame in strips of 24 rows in memory and sends each strip in one transfer, so the screen never shows a partially drawn frame. The values use the [ProFont](https://github.com/wezm/profont) typeface.
+### Stored Measurements
 
-### Weather Scene
-
-The weather scene animates the latest measurement as a landscape of rolling hills under a sky. The weather station measures neither clouds nor rain, so the scene maps what it measures to a picture:
-
-- The sun shines with a UV index of at least 1. The higher the UV index, the brighter its glow and the bluer the sky.
-- Clouds grow with the humidity. From 85 %, they are dark.
-- Rain falls when the humidity is at least 90 % and the air pressure falls, the classic barometric sign of worsening weather. At or below 1 °C, snow falls instead.
-- The sky is icy and the hills are snowy at or below 0 °C. From 25 °C, the sky is warm.
-
-The headline shows the temperature and a description, for instance, "Mild, humid" or "Rain likely". The bar below shows the humidity, the UV index, and the air pressure with its trend: rising or falling by at least 1 hPa over the last two to three hours, or steady. The trend appears once the touch display has two hours of measurements, which it reads from the card after a start.
-
-The scene shows at up to 10 frames per second. It shades every pixel with 8 bits per channel and dithers it to the 16-bit colors of the display, so that the gradients of the sky, the glow of the sun, and the soft edges of the clouds stay smooth. Positions follow from the time since the scene appeared, so the animation runs at the same speed at any frame rate. The display draws a frame strip by strip and lets other work run in between, so that taps and the network are handled while the scene is animated.
-
-### Storage Format
-
-The touch display stores the measurements in one file per day in UTC, `LOG/<year>/<yyyymmdd>.WSL`, for instance, `LOG/2026/20261121.WSL`. A file consists of blocks of 512 bytes, one sector of the card. A block holds a header and up to 31 records of 16 bytes, one for each measurement. A day of measurements takes 46 KB, and a year about 17 MB. `crates/apps/touch-display/src/format.rs` describes the layout.
-
-The header holds the number of records, the index of the block in its file, and a CRC-32, which detects blocks that were only partly written. A record holds the time of the measurement, the temperature, the humidity, the air pressure, and the voltage of the UV sensor as integers, with a bit for each value that is present. The UV index is derived from the voltage. The time is `measuredAt`, or the time of reception if the weather station has not synchronized its clock yet.
-
-The touch display collects the records of a block in memory. It writes a block once it is full, which takes about 15 minutes, and writes a partial block every 5 minutes at the same position. A power failure thus loses at most the measurements of the last 5 minutes. After a restart, the touch display continues the last block of the file if it is partial. After a failure, for instance, because no card is inserted, it starts the card again with the next write.
-
-To read the measurements on a computer, export them as CSV:
+The touch display stores the measurements in one file per day, for instance, `LOG/2026/20261121.WSL`, which takes about 46 KB. It writes to the card at least every 5 minutes, so a power failure loses at most the last 5 minutes. `crates/apps/touch-display/src/format.rs` describes the format. To read the measurements on a computer, export them as CSV:
 
 ```sh
 scripts/export.py /media/sdcard/LOG > measurements.csv
 ```
 
-The script takes files or directories and skips invalid blocks with a warning.
-
 ### Pins
 
-The display runs in landscape, as in the example code of Waveshare, with its colors in BGR order and inverted, as in Waveshare's configuration of `TFT_eSPI` for the board. The XPT2046 touch controller signals touches on its interrupt line, and the firmware then measures their position. It uses the calibration of Waveshare's example code for this orientation. Calibrations vary between panels, so the targets on the screen are large and the log records the position and target of every tap.
+The display, the touch controller, and the microSD slot share SPI1:
 
-The board connects its parts to these pins:
-
-- SPI1, which the display, the touch controller, and the microSD slot share: clock on GP10, data out on GP11, and data in on GP12.
+- SPI1: clock on GP10, data out on GP11, and data in on GP12.
 - Display: data or command on GP8, chip select on GP9, backlight on GP13, and reset on GP15.
 - Touch controller: chip select on GP16 and interrupt on GP17.
 - microSD slot: chip select on GP22.
+
+The touch screen uses the calibration of Waveshare's example code. Calibrations vary between panels, so the targets on the screen are large, and the log records the position and target of every tap.
 
 ## Over-the-Air Updates
 
 A weather station is often installed where nobody wants to go: on a roof, on a mast, or in a garden on the other side of town. Its firmware still needs to change after installation, to fix bugs, to support a new sensor, or to send its data elsewhere. Without over-the-air updates, every such change means a trip to the device and a USB cable.
 
-Both devices update themselves over Wi-Fi through [Nexigon](https://nexigon.cloud), a platform for managing devices and their software. You build a new firmware, publish it as a version of a package, and the devices install it on their own. The update is safe even when nothing goes as planned:
+![The weather station on a windowsill high above the roofs](docs/weather-station-windowsill.jpg)
 
-- **Signed.** A device installs only firmware signed with the release key, so that nobody else can install their own firmware on it.
+Both devices update themselves over Wi-Fi through [Nexigon](https://nexigon.cloud), a platform for managing devices and their software. You build a new firmware, publish it as a version of a package, and the devices install it on their own:
+
+- **Signed.** A device installs only firmware signed with your release key.
 - **A/B slots.** A device downloads an update into a second slot while the current firmware keeps running. Only a complete, verified update replaces it.
-- **Automatic rollback.** A new firmware must reach Nexigon Hub within 5 minutes to commit itself. Otherwise, the watchdog resets the device, and the bootloader restores the previous firmware. A firmware that crashes, hangs, or cannot connect is replaced by the one before it.
+- **Automatic rollback.** A new firmware must reach Nexigon Hub within 5 minutes to commit itself. Otherwise, the bootloader restores the previous firmware, so a firmware that crashes, hangs, or cannot connect is replaced by the one before it.
 - **Power-safe.** A power failure while the bootloader swaps the slots resumes the swap on the next start.
-- **Controlled rollout.** Devices follow a version path, such as the tag `latest` of a package, so that a release reaches all devices that follow it. A single device can be pinned to a version or held back.
+- **Controlled rollout.** Devices follow a version path, such as the tag `latest` of a package. A single device can be pinned to a version or held back.
 - **Visible progress.** Each device reports each step of an update, and any failure, to Nexigon Hub.
-
-Each kind of device has its own package, so that a device only installs its own firmware: `rp-test` for the weather station and `rp-display` for the touch display.
-
-The same connection lets you [configure and monitor the devices](#configure-and-monitor-the-devices) remotely. The connection to Nexigon is optional for the weather station on its own and is enabled by the `nexigon` feature, which is on by default.
 
 ### Set Up Updates
 
 For releases, you need the [Nexigon CLI](https://docs.nexigon.dev) and an organization API token.
 
-Create the key with which updates are signed:
+Create the key with which updates are signed. Keep the private key in `keys/` private: whoever has it can install their own firmware.
 
 ```sh
 mise run create-release-key
 ```
 
-This writes a P-256 key pair to `keys/`. The firmware embeds the public key and installs only updates signed with the private key. All devices that receive the same updates need the same release key. Keep the private key private: whoever has it can install their own firmware.
-
-Create the identity of each device, for instance, of the weather station:
+Create the identity of each device, a key and a certificate in `crates/apps/<crate>/identity/`. Every board needs its own identity, and whoever has it can act as the device.
 
 ```sh
 mise run provision weather-station
+mise run provision touch-display
 ```
-
-This writes a P-256 key, a self-signed certificate for it, and a fingerprint to `crates/apps/weather-station/identity/`. Every board needs its own identity. Keep it private: whoever has it can act as the device.
 
 Configure the firmware in `mise.local.toml`, which Git ignores:
 
@@ -208,191 +143,79 @@ NEXIGON_HUB_URL = "https://nexigon.example.com"
 NEXIGON_DEPLOYMENT_TOKEN = "deployment_..."
 WIFI_SSID = "..."
 WIFI_PASSWORD = "..."
-# Optional: version paths from which the devices install updates.
+# Version paths from which the devices install updates.
 WEATHER_STATION_UPDATE_PATH = "default/rp-test/latest"
 TOUCH_DISPLAY_UPDATE_PATH = "default/rp-display/latest"
 # Only needed for releases.
 NEXIGON_ORG_TOKEN = "org_sk_..."
 ```
 
-Each crate has its own update path, named after the crate. Without `mise`, set these environment variables before running the scripts in `scripts/`. A firmware embeds the configuration, its identity, and the public release key when it is built.
-
-On its first connection, Nexigon Hub registers a device in the project of the deployment token. It authenticates the device with the deployment token, the fingerprint, and the certificate.
+The firmware embeds this configuration, its identity, and the public release key. On its first connection, Nexigon Hub registers the device in the project of the deployment token.
 
 ### Release an Update
 
-Build and publish a new version, for instance, of the weather station:
+Each kind of device has its own package, so that a device only installs its own firmware: `rp-test` for the weather station and `rp-display` for the touch display. Build and publish a new version:
 
 ```sh
 mise run build weather-station
 mise run release weather-station default/rp-test
 ```
 
-The release uploads `target/weather-station/firmware.bin` and its signature `firmware.bin.sig` as assets of a new version of the package `rp-test` in the repository `default`. It tags the version with the firmware version, a locked tag, and moves the tag `latest` to it.
+The release uploads the firmware and its signature as a new version of the package, tags it with the firmware version, and moves the tag `latest` to it. Devices that follow `latest` install it within 5 minutes, or right away with the command `nexigon.ota.check`. An update takes a few minutes.
 
-Devices built with `WEATHER_STATION_UPDATE_PATH = "default/rp-test/latest"` install the version that the tag `latest` points to. The `dev.nexigon.ota.config` property of a device overrides the defaults built into the firmware. For instance, it pins a version with `{"path": "default/rp-test/20261120-163751"}` or holds updates with `{"hold": true}`.
-
-A device checks for updates when it connects, every 5 minutes, and when it receives the command `nexigon.ota.check`. It reports its progress in the `dev.nexigon.ota.status` property. An update takes a few minutes:
-
-```text
-installing version latest
-downloading 554552 bytes
-...
-installed version latest, rebooting
-starting firmware 20261120-170000
-running a new firmware, which commits itself once it reaches Nexigon Hub
-...
-update completed
-```
+The `dev.nexigon.ota.config` property of a device overrides its version path. For instance, `{"path": "default/rp-test/20261120-163751"}` pins a version, and `{"hold": true}` holds updates. The device reports its progress in the `dev.nexigon.ota.status` property.
 
 ### How Updates Work
 
-The flash holds the bootloader, the state of the bootloader, and two slots for the firmware. `firmware.x` describes the layout:
+The flash, as `firmware.x` describes it, holds the bootloader (24 KiB), the state of the bootloader (4 KiB), the active slot with the running firmware (1008 KiB), and the DFU slot for a downloaded update (1012 KiB). The bootloader in `crates/apps/bootloader` is based on `embassy-boot`.
 
-- Bootloader, 24 KiB: `crates/apps/bootloader`, based on `embassy-boot`.
-- Bootloader state, 4 KiB: Pending update and progress of swapping it in.
-- Active slot, 1008 KiB: Running firmware.
-- DFU slot, 1012 KiB: Downloaded update.
+The firmware follows the OTA update contract of Nexigon Hub. It reads the desired version from the configuration, downloads the firmware and its signature into the DFU slot, verifies the signature, and resets. The bootloader swaps the slots and starts the new firmware, which commits itself once it reaches Nexigon Hub. If it does not within 5 minutes, the watchdog resets the device, and the bootloader swaps the old firmware back.
 
-The firmware follows the OTA update contract of Nexigon Hub, which Nexigon Agent also implements. A check reads the desired state from the `dev.nexigon.ota.config` property. It resolves the version path of the configuration and the version of the running firmware, the tag `FIRMWARE_VERSION`, in the same package. If they differ, the firmware downloads the asset and its signature from the object storage of Nexigon Hub over a second TLS connection. It writes the asset to the DFU slot, verifies its signature with the release key, marks it for the bootloader, and resets. The bootloader swaps the slots and starts the new firmware, which commits itself once it reaches Nexigon Hub. If the new firmware does not commit itself within 5 minutes, the watchdog resets the device, and the bootloader swaps the old firmware back. A power failure during a swap resumes it. The firmware reports each step in the `dev.nexigon.ota.status` property.
-
-After joining the Wi-Fi network, the firmware synchronizes its clock with SNTP. It then opens a TLS 1.3 connection to Nexigon Hub with [`embedded-tls`](https://github.com/drogue-iot/embedded-tls) and authenticates with its own certificate. The handshake is the most expensive step on the RP2040, which has no hardware acceleration for cryptography. The connection therefore stays open and is only reopened after a failure. Before reopening it, the firmware joins the Wi-Fi network again if it has lost its address, because the Wi-Fi chip does not rejoin on its own.
-
-Over TLS, the firmware opens a WebSocket connection to `/api/v1/connect/ws`. The multiplex protocol of Nexigon carries channels over it, with flow control for each channel:
-
-- The device opens an `executor` channel and invokes actions over it. It learns its device ID with `actor_GetActor`, reads and writes properties, describes its commands in the `dev.nexigon.commands` property, and publishes events with `devices_PublishEvents`.
-- Nexigon Hub opens a `handler` channel for each command it asks the device to run. The device reads the invocation, runs the command, and answers with its result.
-- Nexigon Hub pings the device every few seconds, and the device answers. The device reconnects if it receives nothing for 30 seconds.
-
-All of this runs on one task, which owns the connection. While the device waits for the next heartbeat, a command, or the response to an action, it answers pings and serves the other channel.
-
-Everything that concerns Nexigon is in `crates/libs/pico-platform/src/nexigon/`, which only the `nexigon` feature of `pico-platform` compiles, together with its dependencies. Its entry point `nexigon::run` takes the configuration of the device, the peripherals that the connection needs, and an `Application`. The application starts its own tasks once the device has joined the Wi-Fi network, with up to two sockets of the network stack at a time, receives the value of its configuration property, and provides the event that the device publishes with every heartbeat. A firmware creates its configuration with `pico_platform::nexigon_config!()`, which embeds what `pico_build::embed_nexigon_config` checks and the identity in `identity/` of the crate.
-
-The types of the actions, command invocations, properties, and results in `generated/nexigon_api.rs` are generated from the API definitions of Nexigon Hub with Sidex's `rust-embedded` backend. They read messages without copying them and borrow from the receive buffers. To update them after changes to the API of Nexigon Hub, run the following with a checkout of the public `nexigon` repository and a Sidex CLI that has the `rust-embedded` backend:
-
-```sh
-mise run generate:api ../nexigon
-```
-
-The connection to Nexigon Hub consists of these files in `crates/libs/pico-platform/src/nexigon/`:
-
-- `mod.rs`: Entry point, applications, and the session with Nexigon Hub.
-- `config.rs`: Configuration and identity of a device.
-- `network.rs`: Wi-Fi and the network stack.
-- `events.rs`: Heartbeat events and the events of applications.
-- `commands.rs`: Commands of the device.
-- `ota.rs`: Update checks following the OTA update contract.
-- `firmware.rs`: Firmware slots, signature verification, and commit deadline.
-- `download.rs`: Downloads over HTTPS.
-- `hub.rs`: Session with Nexigon Hub: actions, commands, and pings.
-- `multiplex.rs`: Frames of the multiplex protocol.
-- `websocket.rs`: WebSocket client.
-- `tls.rs`: TLS connections and client authentication.
-- `clock.rs`: Clock synchronization with SNTP.
+The firmware keeps one TLS connection to Nexigon Hub open, because the RP2040 has no hardware acceleration for the cryptography of a handshake. The code is in `crates/libs/pico-platform/src/nexigon/`, behind the `nexigon` feature. Its API types are generated with Sidex. To regenerate them, run `mise run generate:api ../nexigon` with a checkout of the public `nexigon` repository.
 
 ### Configure and Monitor the Devices
 
-Two device properties configure the IP addresses of the devices. Each device reads its property before every heartbeat, so a change takes effect within 30 seconds:
-
-- The weather station reads `weather-station.config`, for instance, `{"displayAddress": "10.10.2.28"}`.
-- The touch display reads `touch-display.config`, for instance, `{"sensorAddress": "10.10.2.51"}`.
-
-Set the properties in Nexigon Hub, for instance, with the Nexigon CLI:
+Two device properties configure the IP addresses. Each device reads its property every 30 seconds, so a change takes effect without a new firmware:
 
 ```sh
 nexigon-cli devices properties set --protected true <device-id> weather-station.config '{"displayAddress": "10.10.2.28"}'
 nexigon-cli devices properties set --protected true <device-id> touch-display.config '{"sensorAddress": "10.10.2.51"}'
 ```
 
-Only Nexigon Hub can change a protected property, not the device itself. Without its property, the weather station sends nothing, and the touch display rejects all datagrams.
+`displayAddress` is the address to which the weather station sends its measurements, and `sensorAddress` the only address from which the touch display accepts them. Only Nexigon Hub can change a protected property, not the device itself.
 
-Every 30 seconds, each device publishes a `heartbeat` event with its uptime, the version of its firmware, and its IP address, for instance, `{"uptimeSeconds": 42, "firmwareVersion": "20261120-163751", "ipAddress": "10.10.2.51"}`. The events appear in the event log of the device in Nexigon Hub. With the heartbeat, the weather station publishes an `environment` event with its latest measurement, and the touch display a `storage` event with counts since its start:
+Every 30 seconds, each device publishes a `heartbeat` event with its uptime, its firmware version, and its IP address. The weather station adds an `environment` event with its latest measurement. The touch display adds a `storage` event that counts the measurements stored on the card, those not on the card yet, those it dropped, the datagrams it rejected, and the datagrams that never arrived.
 
-```json
-{
-  "storedMeasurements": 120,
-  "bufferedMeasurements": 3,
-  "droppedMeasurements": 0,
-  "rejectedDatagrams": 2,
-  "lostDatagrams": 0
-}
-```
+Both devices offer three commands on their page in Nexigon Hub: `set-led` with `{"on": true}`, `get-status`, and `nexigon.ota.check`. To add a command, extend `crates/libs/pico-platform/src/nexigon/commands.rs`.
 
-Each field counts measurements or datagrams:
+### Limitations of Updates
 
-- `storedMeasurements`: Measurements written to the card.
-- `bufferedMeasurements`: Measurements in memory that are not on the card yet.
-- `droppedMeasurements`: Measurements that could not be stored.
-- `rejectedDatagrams`: Datagrams from another address, with a repeated sequence number, or without a measurement.
-- `lostDatagrams`: Datagrams that never arrived, according to the gaps in the sequence numbers.
+- A firmware that reaches Nexigon Hub commits itself, even if it breaks later updates, for instance, through a bug in the application. Such a firmware must be replaced over USB.
+- The firmware does not verify the certificate of the server, which takes the RP2040 longer than Nexigon Hub waits for a handshake. A man-in-the-middle could learn the deployment token, but the signature of updates prevents them from installing their own firmware.
+- The private key of the device is stored in flash, from which anyone with physical access can read it.
+- The firmware supports the version path, `hold`, and `asset` of the OTA update contract, but no maintenance windows or spreading of updates. It does not retry a failed update on its own.
+- Reading the flash with a debugger while the firmware writes an update corrupts the update.
 
-Both devices offer three commands, which Nexigon Hub lists on the page of the device:
+## Repository
 
-- `set-led` turns the LED of the Pico W on or off. Its input is, for instance, `{"on": true}`.
-- `get-status` reports how long the device has been running and whether the LED is on, for instance, `{"uptimeSeconds": 42, "led": true}`.
-- `nexigon.ota.check` checks for an update right away.
-
-To add a command, describe it in `publish_manifest` and handle it in `execute`, both in `crates/libs/pico-platform/src/nexigon/commands.rs`. The device runs one command at a time, between its other work, so a command must finish quickly. Nexigon Hub stops waiting for a pong after 15 seconds.
-
-### Limitations of the Connection
-
-- A firmware that reaches Nexigon Hub commits itself, even if it breaks later updates, for instance, through a bug in the application. Such a firmware stays installed and must be replaced over USB.
-- The private key of the device is stored in flash, from which anyone with physical access can read it. The RP2040 has no secure key storage.
-- The RP2040 has no true random number generator. The firmware uses its ring oscillator, the best source of entropy available.
-- The firmware does not verify the certificate of the server, so it cannot detect a man-in-the-middle, who would learn the deployment token. Verifying the certificate chain of Let's Encrypt takes the RP2040 more than 80 seconds, longer than Nexigon Hub waits for a handshake. The signature of updates prevents a man-in-the-middle from installing their own firmware.
-- The firmware implements a basic version of the OTA update contract. Besides the version path, it supports `hold` and `asset`. It does not support maintenance windows, spreading updates over time, or checkpoint versions. It does not retry a failed update on its own: the update stays failed until the configuration changes or the failure count in the status is cleared.
-- The device offers commands only. It rejects other channels, such as those for terminals and port forwarding.
-- Command invocations must fit into 1 KiB and responses to actions into 4 KiB.
-- Reading the flash with a debugger while the firmware writes an update corrupts the update. The device then hangs until the watchdog resets it, and the update fails as interrupted.
-- `vendor/embedded-tls/` holds a patched version of `embedded-tls`. See `vendor/README.md`.
-
-## How It Works
-
-The repository is a Cargo workspace. All firmware crates share the bootloader, the flash layout in `firmware.x`, and the platform code in `pico-platform`:
+The repository is a Cargo workspace:
 
 - `crates/apps/bootloader`: Bootloader that swaps in updates and rolls them back.
 - `crates/apps/weather-station`: Firmware of the weather station.
 - `crates/apps/touch-display`: Firmware of the touch display.
 - `crates/libs/pico-platform`: Watchdog, USB logger, and, with the `nexigon` feature, Wi-Fi and over-the-air updates.
-- `crates/libs/pico-build`: Helpers for the build scripts of the firmware crates, which run on the host.
+- `crates/libs/pico-build`: Helpers for the build scripts of the firmware crates.
 
-The weather station enables the `nexigon` feature through its own feature of the same name. Without it, `src/standalone.rs` logs the measurements instead. Both variants use the same bootloader and flash layout, so a device can switch between them when flashed over USB.
-
-The firmware of the weather station consists of these files in `crates/apps/weather-station/src/`:
-
-- `main.rs`: Start of the firmware, which hands the station to a variant.
-- `station.rs`: Station, which measures and shows the measurements.
-- `sensors.rs`: Measurements of all sensors.
-- `dht11.rs`: Readings of the DHT11 sensor.
-- `uv.rs`: Readings of the UV sensor.
-- `bmp280.rs`: Readings of the BMP280 sensor.
-- `display.rs`: Display of the measurements on the TFT.
-- `nexigon.rs`: Measurements for the touch display and Nexigon Hub, with the `nexigon` feature.
-- `standalone.rs`: Logging of measurements without the `nexigon` feature.
-
-The firmware of the touch display consists of these files in `crates/apps/touch-display/src/`:
-
-- `main.rs`: Start of the firmware, configuration, and storage events.
-- `receiver.rs`: Reception of measurements, which it stores and shows, and the interval of the plot.
-- `storage.rs`: Files on the microSD card and writing of blocks.
-- `format.rs`: Binary format of the files.
-- `display.rs`: Display, which paints frames strip by strip.
-- `strip.rs`: Strips of the screen in memory.
-- `style.rs`: Colors and text of the screens.
-- `scene.rs`: Animated weather scene.
-- `weather.rs`: Weather of the scene and trend of the air pressure.
-- `screen.rs`: Layout of the screen and the plot.
-- `history.rs`: Summaries of the measurements of an interval for the plot.
-- `touch.rs`: Positions of taps on the touch screen.
+The module documentation of each crate describes its parts.
 
 ## Limitations
 
-- The touch display identifies the weather station by its IP address only, so any device in the network can send it measurements from that address. Datagrams are not acknowledged, so measurements are lost while the touch display is unreachable. The `lostDatagrams` count of storage events shows how many.
-- A power failure of the touch display loses the measurements that are not on the card yet, at most those of the last 5 minutes.
+- The touch display identifies the weather station by its IP address only, so any device in the network can send it measurements from that address.
+- Datagrams are not acknowledged, so measurements are lost while the touch display is unreachable. The `storage` events count them.
 
 ## License
 
 The firmware is licensed under either of [Apache License, Version 2.0](LICENSE-APACHE) or [MIT License](LICENSE-MIT) at your option. Two parts keep their own licenses:
 
 - The Wi-Fi chip firmware in `crates/libs/pico-platform/firmware/cyw43/` comes from [`cyw43-driver`](https://github.com/georgerobotics/cyw43-driver/tree/main/firmware) and is licensed under the [Infineon Permissive Binary License](crates/libs/pico-platform/firmware/cyw43/LICENSE-permissive-binary-license-1.0.txt).
-- The patched `embedded-tls` in `vendor/embedded-tls/` is licensed under the [Apache License, Version 2.0](vendor/embedded-tls/LICENSE).
+- The patched `embedded-tls` in `vendor/embedded-tls/`, which `vendor/README.md` explains, is licensed under the [Apache License, Version 2.0](vendor/embedded-tls/LICENSE).
