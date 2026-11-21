@@ -2,9 +2,11 @@
 //! which stores the measurements of the weather station on a microSD card.
 //!
 //! The [`receiver`] receives the measurements of the weather station over
-//! UDP, writes them to the microSD card through [`storage`] in the binary
-//! [`format`], and shows the latest one on the [`display`]. The display, the
-//! microSD slot, and the touch controller share SPI1.
+//! UDP and writes them to the microSD card through [`storage`] in the binary
+//! [`format`]. The [`display`] shows the latest measurement and a plot of the
+//! [`history`] in the layout of [`screen`]. A tap on the [`touch`] screen
+//! changes the interval of the plot. The display, the microSD slot, and the
+//! touch controller share SPI1.
 //!
 //! The firmware connects the device to Nexigon Hub with its own identity in
 //! `identity/` through `pico_platform::nexigon`. It runs commands, installs
@@ -23,8 +25,11 @@
 
 mod display;
 mod format;
+mod history;
 mod receiver;
+mod screen;
 mod storage;
+mod touch;
 
 use core::cell::RefCell;
 use core::net::Ipv4Addr;
@@ -63,6 +68,7 @@ use static_cell::StaticCell;
 
 use crate::display::Display;
 use crate::storage::Storage;
+use crate::touch::Touch;
 
 /// Configuration and identity of the device.
 static CONFIG: Config = pico_platform::nexigon_config!();
@@ -86,9 +92,8 @@ async fn main(spawner: Spawner) {
     info!("starting firmware {}", CONFIG.firmware_version);
 
     // Deselect the touch controller and the microSD card before using the
-    // bus. The touch controller stays deselected, because `main` never
-    // returns.
-    let _touch_chip_select = Output::new(p.PIN_16, Level::High);
+    // bus.
+    let touch_chip_select = Output::new(p.PIN_16, Level::High);
     let sd_chip_select = Output::new(p.PIN_22, Level::High);
     static BUS: StaticCell<Bus> = StaticCell::new();
     let bus = BUS.init(Mutex::new(RefCell::new(Spi::new_blocking(
@@ -106,8 +111,8 @@ async fn main(spawner: Spawner) {
             reset: p.PIN_15,
             backlight: p.PIN_13,
         },
-        CONFIG.firmware_version,
     );
+    let touch = Touch::new(bus, touch_chip_select, p.PIN_17);
     let storage = Storage::new(bus, sd_chip_select);
 
     nexigon::run(
@@ -125,7 +130,7 @@ async fn main(spawner: Spawner) {
             },
         },
         TouchDisplay {
-            parts: Some((display, storage)),
+            parts: Some((display, touch, storage)),
         },
     )
     .await
@@ -133,8 +138,9 @@ async fn main(spawner: Spawner) {
 
 /// Application of the device.
 struct TouchDisplay {
-    /// Display and storage, until [`receiver::task`] takes them.
-    parts: Option<(Display, Storage)>,
+    /// Display, touch screen, and storage, until [`receiver::task`] takes
+    /// them.
+    parts: Option<(Display, Touch, Storage)>,
 }
 
 impl Application for TouchDisplay {
@@ -145,8 +151,8 @@ impl Application for TouchDisplay {
     const CONFIG_PROPERTY: Option<&'static str> = Some("touch-display.config");
 
     fn start(&mut self, spawner: Spawner, stack: Stack<'static>) {
-        let (display, storage) = self.parts.take().expect("the application starts once");
-        spawner.spawn(receiver::task(stack, display, storage).unwrap());
+        let (display, touch, storage) = self.parts.take().expect("the application starts once");
+        spawner.spawn(receiver::task(stack, display, touch, storage).unwrap());
     }
 
     fn configure(&mut self, config: Option<Json<'_>>) {

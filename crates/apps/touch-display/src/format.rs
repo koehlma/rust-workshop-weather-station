@@ -99,6 +99,23 @@ impl Record {
         bytes[14] = present;
         bytes[15] = 0;
     }
+
+    /// Reads a record from `bytes`.
+    fn decode(bytes: &[u8; RECORD_SIZE]) -> Self {
+        let present = bytes[14];
+        let value = |bit: u8, raw: f32, scale: f32| (present & bit != 0).then_some(raw / scale);
+        let temperature = i16::from_le_bytes([bytes[4], bytes[5]]);
+        let humidity = u16::from_le_bytes([bytes[6], bytes[7]]);
+        let pressure = u32::from_le_bytes([bytes[8], bytes[9], bytes[10], bytes[11]]);
+        let uv = u16::from_le_bytes([bytes[12], bytes[13]]);
+        Self {
+            time: u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]),
+            temperature_celsius: value(TEMPERATURE, temperature.into(), 100.0),
+            humidity_percent: value(HUMIDITY, humidity.into(), 100.0),
+            pressure_hectopascals: value(PRESSURE, pressure as f32, 100.0),
+            uv_volts: value(UV, uv.into(), 10_000.0),
+        }
+    }
 }
 
 /// Rounds `value` to the nearest integer, saturating at the limits of `i64`.
@@ -146,6 +163,16 @@ impl Block {
         let start = HEADER_SIZE + index * RECORD_SIZE;
         record.encode(&mut self.bytes[start..start + RECORD_SIZE]);
         self.bytes[5] = (index + 1) as u8;
+    }
+
+    /// Returns the records, oldest first.
+    pub fn records(&self) -> impl Iterator<Item = Record> + '_ {
+        self.bytes[HEADER_SIZE..]
+            .as_chunks::<RECORD_SIZE>()
+            .0
+            .iter()
+            .take(self.len())
+            .map(Record::decode)
     }
 
     /// Removes all records.

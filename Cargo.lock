@@ -2192,6 +2192,7 @@ dependencies = [
  "cortex-m-rt",
  "embassy-embedded-hal",
  "embassy-executor",
+ "embassy-futures",
  "embassy-net",
  "embassy-rp",
  "embassy-sync",

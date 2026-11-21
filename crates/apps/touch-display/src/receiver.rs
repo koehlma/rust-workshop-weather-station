@@ -1,4 +1,5 @@
-//! Reception of measurements from the weather station.
+//! Reception, storage, and display of the measurements of the weather
+//! station.
 //!
 //! [`task`] receives measurements as UDP datagrams on [`PORT`]. A datagram
 //! holds the body of an environment event of the weather station, the time
@@ -6,8 +7,12 @@
 //! weather station increments with every datagram since its start. The task
 //! accepts measurements only from the IP address that [`set_sensor_address`]
 //! sets, and rejects repeated sequence numbers. It adds every accepted
-//! measurement to the [`Storage`] and shows the latest one on the
-//! [`Display`].
+//! measurement to the [`Storage`] and the [`History`].
+//!
+//! The [`Display`] shows the latest measurement and a plot of the history of
+//! one [`Metric`], which changes every [`METRIC_INTERVAL`]. A tap on the touch
+//! screen switches to the next [`Interval`], whose history the task then
+//! reads from the storage.
 //!
 //! A measurement without `measuredAt` gets the time of its reception. While
 //! the clock of the touch display is not synchronized either, up to
@@ -17,6 +22,9 @@ use core::cell::Cell;
 use core::fmt::Write as _;
 use core::net::Ipv4Addr;
 
+use embassy_futures::select::Either3;
+use embassy_futures::select::select3;
+use embassy_futures::yield_now;
 use embassy_net::IpAddress;
 use embassy_net::IpEndpoint;
 use embassy_net::Stack;
@@ -24,8 +32,9 @@ use embassy_net::udp::PacketMetadata;
 use embassy_net::udp::UdpSocket;
 use embassy_sync::blocking_mutex::Mutex;
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
+use embassy_time::Duration;
 use embassy_time::Instant;
-use embassy_time::with_deadline;
+use embassy_time::Timer;
 use heapless::Deque;
 use heapless::String;
 use log::info;
@@ -41,14 +50,24 @@ use portable_atomic::Ordering;
 
 use crate::display::Display;
 use crate::format::Record;
+use crate::history::BUCKETS;
+use crate::history::History;
+use crate::history::Interval;
+use crate::history::Metric;
+use crate::screen::Screen;
 use crate::storage;
+use crate::storage::DAY_SECONDS;
 use crate::storage::Storage;
+use crate::touch::Touch;
 
 /// UDP port on which the display receives measurements.
 pub const PORT: u16 = 4242;
 
 /// Maximum number of measurements that wait for the clock.
 const UNTIMED_CAPACITY: usize = 16;
+
+/// Time for which the plot shows a metric before it shows the next one.
+const METRIC_INTERVAL: Duration = Duration::from_secs(10);
 
 /// IP address of the weather station, if configured.
 static SENSOR_ADDRESS: Mutex<CriticalSectionRawMutex, Cell<Option<Ipv4Addr>>> =
@@ -93,8 +112,12 @@ pub fn set_sensor_address(address: Option<Ipv4Addr>) {
 
 /// Receives measurements, stores them, and shows them.
 #[embassy_executor::task]
-pub async fn task(stack: Stack<'static>, mut display: Display, mut storage: Storage) -> ! {
-    display.show(&["Waiting for measurements"]);
+pub async fn task(
+    stack: Stack<'static>,
+    mut display: Display,
+    mut touch: Touch,
+    mut storage: Storage,
+) -> ! {
     let mut rx_meta = [PacketMetadata::EMPTY; 4];
     let mut rx_buffer = [0; 1024];
     let mut tx_meta = [PacketMetadata::EMPTY; 1];
@@ -113,36 +136,58 @@ pub async fn task(stack: Stack<'static>, mut display: Display, mut storage: Stor
         last_sequence: None,
         untimed: Deque::new(),
         latest: None,
+        history: History::new(Interval::Day),
+        loaded: false,
+        metric: Metric::Temperature,
     };
+    let mut next_metric = Instant::now() + METRIC_INTERVAL;
     loop {
-        let received = match storage.checkpoint_deadline() {
-            Some(deadline) => with_deadline(deadline, socket.recv_from(&mut datagram))
-                .await
-                .ok(),
-            None => Some(socket.recv_from(&mut datagram).await),
-        };
-        match received {
-            None => storage.checkpoint(),
-            Some(Err(error)) => {
-                warn!("failed to receive a datagram: {error:?}");
-                REJECTED.add(1, Ordering::Relaxed);
-                continue;
-            }
-            Some(Ok((length, metadata))) => {
+        receiver.load(&mut storage, &mut display).await;
+        receiver.show(&mut display, &storage, None);
+        let deadline = storage
+            .checkpoint_deadline()
+            .map_or(next_metric, |checkpoint| checkpoint.min(next_metric));
+        let event = select3(
+            socket.recv_from(&mut datagram),
+            Timer::at(deadline),
+            touch.tap(),
+        )
+        .await;
+        match event {
+            Either3::First(Ok((length, metadata))) => {
                 match receiver.accept(metadata.endpoint, &datagram[..length]) {
                     Some(measurement) => receiver.add(&mut storage, measurement),
-                    None => {
-                        REJECTED.add(1, Ordering::Relaxed);
-                        continue;
-                    }
+                    None => REJECTED.add(1, Ordering::Relaxed),
                 }
             }
+            Either3::First(Err(error)) => {
+                warn!("failed to receive a datagram: {error:?}");
+                REJECTED.add(1, Ordering::Relaxed);
+            }
+            Either3::Second(()) => {
+                if storage
+                    .checkpoint_deadline()
+                    .is_some_and(|checkpoint| checkpoint <= Instant::now())
+                {
+                    storage.checkpoint();
+                }
+                if next_metric <= Instant::now() {
+                    receiver.metric = receiver.metric.next();
+                    next_metric = Instant::now() + METRIC_INTERVAL;
+                }
+            }
+            Either3::Third(()) => {
+                let interval = receiver.history.interval().next();
+                info!("showing the last {}", interval.label());
+                receiver.history.reset(interval);
+                receiver.loaded = false;
+                next_metric = Instant::now() + METRIC_INTERVAL;
+            }
         }
-        receiver.show(&mut display, &storage);
     }
 }
 
-/// State of the reception.
+/// State of the reception and the display.
 struct Receiver {
     /// Sequence number of the latest accepted datagram.
     last_sequence: Option<u32>,
@@ -151,6 +196,12 @@ struct Receiver {
     untimed: Deque<(Instant, Measurement), UNTIMED_CAPACITY>,
     /// Latest accepted measurement.
     latest: Option<Measurement>,
+    /// Measurements of the interval that the plot shows.
+    history: History,
+    /// Indicates whether the history holds the measurements of the storage.
+    loaded: bool,
+    /// Metric that the plot shows.
+    metric: Metric,
 }
 
 impl Receiver {
@@ -205,12 +256,12 @@ impl Receiver {
             Some(now) => {
                 while let Some((received, waiting)) = self.untimed.pop_front() {
                     let age = received.elapsed().as_secs();
-                    storage.push(&waiting.record(now.saturating_sub(age) as u32));
+                    self.store(storage, &waiting.record(now.saturating_sub(age) as u32));
                 }
-                storage.push(&measurement.record(time.unwrap_or(now as u32)));
+                self.store(storage, &measurement.record(time.unwrap_or(now as u32)));
             }
             None => match time {
-                Some(time) => storage.push(&measurement.record(time)),
+                Some(time) => self.store(storage, &measurement.record(time)),
                 None => {
                     if self.untimed.is_full() {
                         warn!("dropped a measurement without time");
@@ -222,46 +273,96 @@ impl Receiver {
         }
     }
 
-    /// Shows the latest measurement and the counts of the storage.
-    fn show(&self, display: &mut Display, storage: &Storage) {
-        let Some(latest) = &self.latest else {
+    /// Adds `record` to `storage` and, once loaded, to the history.
+    fn store(&mut self, storage: &mut Storage, record: &Record) {
+        storage.push(record);
+        if self.loaded {
+            self.history.add(record);
+        }
+    }
+
+    /// Reads the history from `storage`, once the clock is synchronized, if
+    /// it has not been read yet.
+    ///
+    /// Yields after every day, so that the network keeps running while it
+    /// reads a long interval.
+    async fn load(&mut self, storage: &mut Storage, display: &mut Display) {
+        if self.loaded {
+            return;
+        }
+        let Some(now) = nexigon::unix_seconds() else {
             return;
         };
+        self.show(display, storage, Some("Reading the SD card"));
+        let now = now as u32;
+        let start = now.saturating_sub(self.history.interval().seconds());
+        let started = Instant::now();
+        for day in start / DAY_SECONDS..=now / DAY_SECONDS {
+            let history = &mut self.history;
+            let result = storage.read_day(day, |record| {
+                if record.time >= start {
+                    history.add(record);
+                }
+            });
+            if result.is_err() {
+                break;
+            }
+            yield_now().await;
+        }
+        info!(
+            "read the last {} in {} ms",
+            self.history.interval().label(),
+            started.elapsed().as_millis()
+        );
+        self.loaded = true;
+    }
+
+    /// Shows the latest measurement, the plot, and `note` or the state of
+    /// `storage`.
+    fn show(&self, display: &mut Display, storage: &Storage, note: Option<&str>) {
+        let columns = match nexigon::unix_seconds() {
+            Some(now) if self.loaded => self.history.columns(self.metric, now as u32),
+            _ => [None; BUCKETS],
+        };
+        let value = |metric: Metric| self.latest.and_then(|latest| latest.value(metric));
+        let mut details = String::<64>::new();
+        for metric in Metric::ALL
+            .into_iter()
+            .filter(|metric| *metric != self.metric)
+        {
+            let _ = match (metric, value(metric)) {
+                (Metric::UvIndex, Some(value)) => write!(details, "UV {value:.1}   "),
+                (_, Some(value)) => write!(
+                    details,
+                    "{value:.precision$} {}   ",
+                    metric.unit(),
+                    precision = metric.precision()
+                ),
+                (_, None) => write!(details, "{} -   ", metric.label()),
+            };
+        }
         let counts = storage::counts();
-        let mut status = Line::new();
-        // Lines that do not fit are cut off.
-        let _ = if storage.has_failed() {
-            write!(status, "SD card failed")
-        } else {
-            write!(
+        let mut status = String::<40>::new();
+        // Text that does not fit is cut off.
+        let _ = match note {
+            Some(note) => status.write_str(note),
+            None if storage.has_failed() => status.write_str("SD card failed"),
+            None => write!(
                 status,
                 "Stored {}, buffered {}",
                 counts.stored, counts.buffered
-            )
+            ),
         };
-        let lines = [
-            value_line("Temperature", latest.temperature_celsius, 1, "°C"),
-            value_line("Humidity", latest.humidity_percent, 0, "%"),
-            value_line("UV index", latest.uv_index, 1, ""),
-            value_line("Pressure", latest.pressure_hectopascals, 1, "hPa"),
-            status,
-        ];
-        display.show(&lines.each_ref().map(Line::as_str));
+        display.show(&Screen {
+            metric: self.metric,
+            value: value(self.metric),
+            details: details.trim_end(),
+            interval: self.history.interval(),
+            columns: &columns,
+            status: &status,
+            firmware_version: crate::CONFIG.firmware_version,
+        });
     }
-}
-
-/// Line of text on the display.
-type Line = String<32>;
-
-/// Returns a line with `label` and `value`, or a dash if the value is missing.
-fn value_line(label: &str, value: Option<f32>, precision: usize, unit: &str) -> Line {
-    let mut line = Line::new();
-    // Lines that do not fit are cut off.
-    let _ = match value {
-        Some(value) => write!(line, "{label:<13}{value:.precision$} {unit}"),
-        None => write!(line, "{label:<13}-"),
-    };
-    line
 }
 
 /// Measurement of a datagram.
@@ -287,6 +388,16 @@ impl Measurement {
             humidity_percent: self.humidity_percent,
             pressure_hectopascals: self.pressure_hectopascals,
             uv_volts: self.uv_volts,
+        }
+    }
+
+    /// Returns the value of `metric`, if present.
+    fn value(&self, metric: Metric) -> Option<f32> {
+        match metric {
+            Metric::Temperature => self.temperature_celsius,
+            Metric::Humidity => self.humidity_percent,
+            Metric::UvIndex => self.uv_index,
+            Metric::Pressure => self.pressure_hectopascals,
         }
     }
 }

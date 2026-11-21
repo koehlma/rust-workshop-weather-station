@@ -10,7 +10,8 @@
 //! power failure loses at most the measurements of that interval. When it
 //! opens the file of a day, [`Storage`] continues its last block if that is
 //! partial. After a failure, for instance, after the card has been removed,
-//! the next write starts the card again.
+//! the next write starts the card again. [`Storage::read_day`] reads the
+//! records of a day, those on the card and those in memory.
 //!
 //! The card starts at [`INIT_FREQUENCY`] and continues at [`FREQUENCY`].
 
@@ -64,7 +65,7 @@ const INIT_FREQUENCY: u32 = 400_000;
 const FREQUENCY: u32 = 16_000_000;
 
 /// Seconds of a day.
-const DAY_SECONDS: u32 = 86_400;
+pub const DAY_SECONDS: u32 = 86_400;
 
 /// Number of measurements written to the card since the start.
 static STORED: AtomicU32 = AtomicU32::new(0);
@@ -122,14 +123,6 @@ pub fn counts() -> Counts {
     }
 }
 
-/// Open file of a day.
-struct OpenFile {
-    volume: RawVolume,
-    file: RawFile,
-    /// Day of the file in days since the Unix epoch.
-    day: u32,
-}
-
 /// Measurements on the microSD card.
 pub struct Storage {
     bus: &'static Bus,
@@ -138,7 +131,10 @@ pub struct Storage {
     started: bool,
     /// Indicates whether the last access of the card failed.
     failed: bool,
-    open: Option<OpenFile>,
+    volume: Option<RawVolume>,
+    /// File to which the block is written, with its day in days since the
+    /// Unix epoch.
+    file: Option<(RawFile, u32)>,
     /// Block that collects the measurements.
     block: Block,
     /// Day of the block in days since the Unix epoch.
@@ -160,7 +156,8 @@ impl Storage {
             volumes: VolumeManager::new(SdCard::new(device, Delay), Clock),
             started: false,
             failed: false,
-            open: None,
+            volume: None,
+            file: None,
             block: Block::new(),
             day: 0,
             index: None,
@@ -219,6 +216,63 @@ impl Storage {
     /// Indicates whether the last access of the card failed.
     pub fn has_failed(&self) -> bool {
         self.failed
+    }
+
+    /// Calls `f` with the records of `day` in days since the Unix epoch,
+    /// those on the card and those in memory, oldest first.
+    pub fn read_day(&mut self, day: u32, mut f: impl FnMut(&Record)) -> Result<(), Error> {
+        let result = self.read_card(day, &mut f);
+        if let Err(error) = &result {
+            warn!("failed to read from the SD card: {error}");
+            self.fail();
+        }
+        if day == self.day {
+            self.block.records().for_each(|record| f(&record));
+        }
+        result
+    }
+
+    /// Calls `f` with the records of `day` on the card that are not in
+    /// memory.
+    fn read_card(&mut self, day: u32, f: &mut impl FnMut(&Record)) -> Result<(), Error> {
+        let volume = self.volume()?;
+        // The block in memory replaces the blocks from its index on.
+        let end = if day == self.day { self.index } else { None };
+        let (file, opened) = match self.file {
+            Some((file, file_day)) if file_day == day => (file, false),
+            _ => match self.open_file(volume, day, Mode::ReadOnly) {
+                Ok(file) => (file, true),
+                Err(Error(embedded_sdmmc::Error::NotFound)) => return Ok(()),
+                Err(error) => return Err(error),
+            },
+        };
+        let result = self.read_blocks(file, end, f);
+        if opened {
+            let _ = self.volumes.close_file(file);
+        }
+        result
+    }
+
+    /// Calls `f` with the records of the valid blocks of `file` before
+    /// `end`, or of all blocks if `end` is `None`.
+    fn read_blocks(
+        &self,
+        file: RawFile,
+        end: Option<u32>,
+        f: &mut impl FnMut(&Record),
+    ) -> Result<(), Error> {
+        let blocks = self.volumes.file_length(file)? / BLOCK_SIZE as u32;
+        let end = end.map_or(blocks, |end| end.min(blocks));
+        self.volumes.file_seek_from_start(file, 0)?;
+        let mut bytes = [0; BLOCK_SIZE];
+        for index in 0..end {
+            self.volumes.read(file, &mut bytes)?;
+            match Block::decode(&bytes, index) {
+                Some(block) => block.records().for_each(|record| f(&record)),
+                None => warn!("skipped invalid block {index}"),
+            }
+        }
+        Ok(())
     }
 
     /// Writes the block to the card. Starts the next block if it is full.
@@ -280,30 +334,39 @@ impl Storage {
         BUFFERED.store((self.block.len() - self.written) as u32, Ordering::Relaxed);
     }
 
-    /// Opens the file of `day`, starting the card if necessary, and returns
-    /// the file and its number of blocks.
+    /// Opens the volume, starting the card if necessary.
+    fn volume(&mut self) -> Result<RawVolume, Error> {
+        if !self.started {
+            self.start()?;
+        }
+        match self.volume {
+            Some(volume) => Ok(volume),
+            None => {
+                let volume = self.volumes.open_raw_volume(VolumeIdx(0))?;
+                self.volume = Some(volume);
+                Ok(volume)
+            }
+        }
+    }
+
+    /// Opens the file of `day` for writing and returns it with its number of
+    /// blocks.
     ///
     /// If the block is empty and has no index yet, it continues the last
     /// block of the file if that is partial.
     fn open(&mut self, day: u32) -> Result<(RawFile, u32), Error> {
-        if self.open.as_ref().is_some_and(|open| open.day != day) {
-            self.close();
+        if let Some((file, file_day)) = self.file
+            && file_day != day
+        {
+            let _ = self.volumes.close_file(file);
+            self.file = None;
         }
-        if !self.started {
-            self.start()?;
-        }
-        let file = match &self.open {
-            Some(open) => open.file,
+        let volume = self.volume()?;
+        let file = match self.file {
+            Some((file, _)) => file,
             None => {
-                let volume = self.volumes.open_raw_volume(VolumeIdx(0))?;
-                let file = match self.open_file(volume, day) {
-                    Ok(file) => file,
-                    Err(error) => {
-                        let _ = self.volumes.close_volume(volume);
-                        return Err(error);
-                    }
-                };
-                self.open = Some(OpenFile { volume, file, day });
+                let file = self.open_file(volume, day, Mode::ReadWriteCreateOrAppend)?;
+                self.file = Some((file, day));
                 file
             }
         };
@@ -326,8 +389,10 @@ impl Storage {
         Ok((file, blocks))
     }
 
-    /// Opens or creates the file of `day` on `volume`.
-    fn open_file(&self, volume: RawVolume, day: u32) -> Result<RawFile, Error> {
+    /// Opens the file of `day` on `volume` in `mode`. Creates the file and
+    /// its directories unless `mode` is [`Mode::ReadOnly`].
+    fn open_file(&self, volume: RawVolume, day: u32, mode: Mode) -> Result<RawFile, Error> {
+        let create = mode != Mode::ReadOnly;
         let (year, month, day) = civil_from_days(day.into());
         let mut year_name = String::<4>::new();
         let mut file_name = String::<12>::new();
@@ -336,27 +401,33 @@ impl Storage {
             .expect("file names have 12 characters");
 
         let root = self.volumes.open_root_dir(volume)?;
-        let directory = self.open_or_make_dir(root, DIRECTORY);
+        let directory = self.open_dir(root, DIRECTORY, create);
         let _ = self.volumes.close_dir(root);
         let directory = directory?;
-        let year_directory = self.open_or_make_dir(directory, &year_name);
+        let year_directory = self.open_dir(directory, &year_name, create);
         let _ = self.volumes.close_dir(directory);
         let year_directory = year_directory?;
-        let file = self.volumes.open_file_in_dir(
-            year_directory,
-            file_name.as_str(),
-            Mode::ReadWriteCreateOrAppend,
-        );
+        let file = self
+            .volumes
+            .open_file_in_dir(year_directory, file_name.as_str(), mode);
         let _ = self.volumes.close_dir(year_directory);
         let file = file?;
-        info!("opened {DIRECTORY}/{year_name}/{file_name}");
+        if create {
+            info!("opened {DIRECTORY}/{year_name}/{file_name}");
+        }
         Ok(file)
     }
 
-    /// Opens the directory `name` in `parent`, creating it if it is missing.
-    fn open_or_make_dir(&self, parent: RawDirectory, name: &str) -> Result<RawDirectory, Error> {
+    /// Opens the directory `name` in `parent`. Creates it if it is missing
+    /// and `create` is set.
+    fn open_dir(
+        &self,
+        parent: RawDirectory,
+        name: &str,
+        create: bool,
+    ) -> Result<RawDirectory, Error> {
         match self.volumes.open_dir(parent, name) {
-            Err(embedded_sdmmc::Error::NotFound) => {
+            Err(embedded_sdmmc::Error::NotFound) if create => {
                 self.volumes.make_dir_in_dir(parent, name)?;
                 Ok(self.volumes.open_dir(parent, name)?)
             }
@@ -364,11 +435,13 @@ impl Storage {
         }
     }
 
-    /// Closes the file of the day.
+    /// Closes the file and the volume.
     fn close(&mut self) {
-        if let Some(open) = self.open.take() {
-            let _ = self.volumes.close_file(open.file);
-            let _ = self.volumes.close_volume(open.volume);
+        if let Some((file, _)) = self.file.take() {
+            let _ = self.volumes.close_file(file);
+        }
+        if let Some(volume) = self.volume.take() {
+            let _ = self.volumes.close_volume(volume);
         }
     }
 

@@ -2,10 +2,10 @@
 
 Firmware for two devices built on the Raspberry Pi Pico W (RP2040). It is written in Rust with [Embassy](https://embassy.dev) and runs without an operating system or an allocator.
 
-| Crate                         | Device                                                                                                  |
-| ----------------------------- | ------------------------------------------------------------------------------------------------------- |
-| `crates/apps/weather-station` | Weather station that measures temperature, humidity, UV radiation, and air pressure and shows them      |
-| `crates/apps/touch-display`   | Waveshare Pico-ResTouch-LCD-2.8 that stores the measurements on a microSD card and shows the latest one |
+| Crate                         | Device                                                                                             |
+| ----------------------------- | -------------------------------------------------------------------------------------------------- |
+| `crates/apps/weather-station` | Weather station that measures temperature, humidity, UV radiation, and air pressure and shows them |
+| `crates/apps/touch-display`   | Waveshare Pico-ResTouch-LCD-2.8 that stores the measurements on a microSD card and plots them      |
 
 Both devices connect to Nexigon Hub, each with its own identity. Every 30 seconds, the weather station measures and sends the measurement directly to the touch display over the local network. Every 30 seconds, a device publishes a heartbeat event, the weather station its latest measurement, and the touch display the number of stored measurements. Device properties in Nexigon Hub configure the IP addresses of the devices. The devices run commands that Nexigon Hub sends and install updates that Nexigon Hub rolls out. A bootloader swaps in updates and rolls back those that fail. The weather station can also be built without Nexigon, in which case it logs its measurements to the USB serial port.
 
@@ -149,7 +149,7 @@ If a sensor fails, the device logs a warning and leaves out its fields. If all f
 
 ## Touch Display
 
-The touch display receives the measurements of the weather station, stores them on the microSD card, and shows the latest one. The weather station sends every measurement as a UDP datagram to port 4242 of the touch display. The datagram holds the body of an `environment` event, the time of the measurement in `measuredAt`, and a `sequence` number, which counts the datagrams since the start of the weather station. The weather station sends every measurement right away, without buffering it, and also while it is not connected to Nexigon Hub. The touch display shows every measurement as soon as it arrives.
+The touch display receives the measurements of the weather station, stores them on the microSD card, and shows the latest one with a plot of the stored measurements. The weather station sends every measurement as a UDP datagram to port 4242 of the touch display. The datagram holds the body of an `environment` event, the time of the measurement in `measuredAt`, and a `sequence` number, which counts the datagrams since the start of the weather station. The weather station sends every measurement right away, without buffering it, and also while it is not connected to Nexigon Hub. The touch display shows every measurement as soon as it arrives.
 
 Two device properties configure the IP addresses. Each device reads its property before every heartbeat, so a change takes effect within 30 seconds:
 
@@ -166,6 +166,14 @@ nexigon-cli devices properties set --protected true <device-id> touch-display.co
 ```
 
 Only Nexigon Hub can change a protected property, not the device itself. Without its property, the weather station sends nothing, and the touch display rejects all datagrams.
+
+### Screen
+
+The touch display shows the latest value of one quantity, the latest values of the others, and a plot of the stored measurements of the quantity. The plot changes between temperature, humidity, UV index, and air pressure every 10 seconds. It covers the last 24 hours. A tap anywhere on the screen changes the interval to 7 days, 30 days, 6 hours, and back to 24 hours. The interval appears in the top right corner.
+
+Each of the 288 columns of the plot summarizes the measurements of a bucket of the interval, for instance, 5 minutes of the last 24 hours. A dark band spans from their minimum to their maximum, and a bright line connects their means. Buckets without measurements stay empty. The vertical axis fits the measurements of the interval.
+
+The touch display keeps the summaries of the interval in memory and adds every new measurement to them. When the interval changes, and after a restart once the clock is synchronized, it reads the measurements of the interval from the card. While it reads, the screen shows "Reading the SD card".
 
 ### Storage Format
 
@@ -207,7 +215,7 @@ With every heartbeat, the touch display publishes a `storage` event with counts 
 
 ### Pins
 
-The display runs in landscape, as in the example code of Waveshare. The firmware keeps the touch controller deselected and does not use it.
+The display runs in landscape, as in the example code of Waveshare. The firmware detects taps with the interrupt line of the XPT2046 touch controller and does not read the position of a touch.
 
 | Signal                  | GPIO |
 | ----------------------- | ---- |
@@ -219,6 +227,7 @@ The display runs in landscape, as in the example code of Waveshare. The firmware
 | Display backlight       | GP13 |
 | Display reset           | GP15 |
 | Touch chip select       | GP16 |
+| Touch interrupt         | GP17 |
 | microSD chip select     | GP22 |
 
 ## Commands
@@ -289,13 +298,16 @@ The weather station enables the `nexigon` feature through its own feature of the
 | `nexigon.rs`                               | Measurements for Nexigon Hub and the touch display, with the `nexigon` feature |
 | `standalone.rs`                            | Logging of measurements without Nexigon                                        |
 
-| File in `crates/apps/touch-display/src/` | Purpose                                                  |
-| ---------------------------------------- | -------------------------------------------------------- |
-| `main.rs`                                | Start of the firmware, configuration, and storage events |
-| `receiver.rs`                            | Reception of measurements, which it stores and shows     |
-| `storage.rs`                             | Files on the microSD card and writing of blocks          |
-| `format.rs`                              | Binary format of the files                               |
-| `display.rs`                             | Display of the latest measurement                        |
+| File in `crates/apps/touch-display/src/` | Purpose                                                                            |
+| ---------------------------------------- | ---------------------------------------------------------------------------------- |
+| `main.rs`                                | Start of the firmware, configuration, and storage events                           |
+| `receiver.rs`                            | Reception of measurements, which it stores and shows, and the interval of the plot |
+| `storage.rs`                             | Files on the microSD card and writing of blocks                                    |
+| `format.rs`                              | Binary format of the files                                                         |
+| `display.rs`                             | Display                                                                            |
+| `screen.rs`                              | Layout of the screen and the plot                                                  |
+| `history.rs`                             | Summaries of the measurements of an interval for the plot                          |
+| `touch.rs`                               | Taps on the touch screen                                                           |
 
 ### Connection to Nexigon Hub
 

@@ -3,8 +3,7 @@
 //! The display is an ST7789 with 240 × 320 pixels on the shared [`Bus`].
 //! [`Display::new`] starts it in landscape, as in the example code of
 //! Waveshare: RGB, without color inversion, and mirrored horizontally with
-//! rows and columns swapped. It draws a title and the version of the firmware.
-//! [`Display::show`] draws lines of text between them.
+//! rows and columns swapped. [`Display::show`] draws a [`Screen`].
 
 use embassy_embedded_hal::shared_bus::blocking::spi::SpiDeviceWithConfig;
 use embassy_rp::Peri;
@@ -19,15 +18,8 @@ use embassy_rp::spi;
 use embassy_rp::spi::Spi;
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 use embassy_time::Delay;
-use embedded_graphics::mono_font::MonoTextStyle;
-use embedded_graphics::mono_font::iso_8859_1::FONT_6X10;
-use embedded_graphics::mono_font::iso_8859_1::FONT_10X20;
 use embedded_graphics::pixelcolor::Rgb565;
 use embedded_graphics::prelude::*;
-use embedded_graphics::primitives::PrimitiveStyle;
-use embedded_graphics::primitives::Rectangle;
-use embedded_graphics::text::Baseline;
-use embedded_graphics::text::Text;
 use mipidsi::Builder;
 use mipidsi::interface::SpiInterface;
 use mipidsi::models::ST7789;
@@ -38,21 +30,11 @@ use mipidsi::options::Rotation;
 use static_cell::StaticCell;
 
 use crate::Bus;
+use crate::screen;
+use crate::screen::Screen;
 
 /// Clock frequency of the display. Waveshare tested writes at up to 60 MHz.
 const SPI_FREQUENCY: u32 = 32_000_000;
-
-/// Distance of the text from the edges.
-const MARGIN: i32 = 12;
-
-/// Top of the lines of [`Display::show`].
-const LINES_TOP: i32 = 52;
-
-/// Height of a line of [`Display::show`].
-const LINE_HEIGHT: i32 = 28;
-
-/// Area of the lines of [`Display::show`], which is cleared before drawing.
-const LINES_AREA: Rectangle = Rectangle::new(Point::new(0, LINES_TOP), Size::new(320, 168));
 
 type Interface = SpiInterface<
     'static,
@@ -80,8 +62,8 @@ pub struct Display {
 }
 
 impl Display {
-    /// Starts the display and draws the title and the version of the firmware.
-    pub fn new(bus: &'static Bus, pins: Pins, firmware_version: &str) -> Self {
+    /// Starts the display and clears it.
+    pub fn new(bus: &'static Bus, pins: Pins) -> Self {
         let backlight = Output::new(pins.backlight, Level::High);
         let mut config = spi::Config::default();
         config.frequency = SPI_FREQUENCY;
@@ -104,43 +86,15 @@ impl Display {
         display
             .clear(Rgb565::BLACK)
             .expect("the SPI bus and the pins of the display do not fail");
-        let title = MonoTextStyle::new(&FONT_10X20, Rgb565::CYAN);
-        Text::with_baseline(
-            "Weather Station",
-            Point::new(MARGIN, MARGIN),
-            title,
-            Baseline::Top,
-        )
-        .draw(&mut display)
-        .expect("the SPI bus and the pins of the display do not fail");
-        let caption = MonoTextStyle::new(&FONT_6X10, Rgb565::CSS_GRAY);
-        Text::with_baseline(
-            firmware_version,
-            Point::new(MARGIN, 240 - MARGIN),
-            caption,
-            Baseline::Bottom,
-        )
-        .draw(&mut display)
-        .expect("the SPI bus and the pins of the display do not fail");
         Self {
             display,
             _backlight: backlight,
         }
     }
 
-    /// Replaces the lines between the title and the version of the firmware.
-    /// Six lines of 30 characters fit.
-    pub fn show(&mut self, lines: &[&str]) {
-        LINES_AREA
-            .into_styled(PrimitiveStyle::with_fill(Rgb565::BLACK))
-            .draw(&mut self.display)
+    /// Draws `screen`, replacing what the display showed before.
+    pub fn show(&mut self, screen: &Screen) {
+        screen::draw(&mut self.display, screen)
             .expect("the SPI bus and the pins of the display do not fail");
-        let style = MonoTextStyle::new(&FONT_10X20, Rgb565::WHITE);
-        for (index, line) in lines.iter().enumerate() {
-            let top = LINES_TOP + index as i32 * LINE_HEIGHT;
-            Text::with_baseline(line, Point::new(MARGIN, top), style, Baseline::Top)
-                .draw(&mut self.display)
-                .expect("the SPI bus and the pins of the display do not fail");
-        }
     }
 }
