@@ -6,7 +6,7 @@
 //! [`config::UPDATE_PATH`]. The
 //! configuration names a version path `<repository>/<package>/<version>`. The
 //! running firmware is the version of the package with the tag
-//! [`config::FIRMWARE_VERSION`]. If the path resolves to another version, the
+//! [`crate::FIRMWARE_VERSION`]. If the path resolves to another version, the
 //! device downloads its asset, `firmware.bin` by default, and the signature of
 //! the asset, `firmware.bin.sig`, writes the asset to the DFU slot, and resets
 //! into it. After the reset, the new firmware commits itself and reports the
@@ -29,32 +29,32 @@ use sidex_embedded::types::Json;
 use sidex_embedded::types::Seq;
 use sidex_embedded::types::Str;
 
-use crate::config;
-use crate::download::Download;
-use crate::firmware::Firmware;
-use crate::hub;
-use crate::hub::Session;
-use crate::hub::WaitReadable;
-use crate::nexigon_api::devices::DeviceId;
-use crate::nexigon_api::devices::GetDevicePropertyAction;
-use crate::nexigon_api::devices::GetDevicePropertyOutput;
-use crate::nexigon_api::devices::SetDevicePropertyAction;
-use crate::nexigon_api::devices::SetDevicePropertyOutput;
-use crate::nexigon_api::properties::OtaUpdateBlocked;
-use crate::nexigon_api::properties::OtaUpdateBlockedCode;
-use crate::nexigon_api::properties::OtaUpdateCapability;
-use crate::nexigon_api::properties::OtaUpdateConfig;
-use crate::nexigon_api::properties::OtaUpdateFailureCode;
-use crate::nexigon_api::properties::OtaUpdateState;
-use crate::nexigon_api::properties::OtaUpdateStatus;
-use crate::nexigon_api::repositories::IssueAssetDownloadUrlAction;
-use crate::nexigon_api::repositories::IssueAssetDownloadUrlOutput;
-use crate::nexigon_api::repositories::PackageVersionId;
-use crate::nexigon_api::repositories::ResolvePackageVersionAssetByPathAction;
-use crate::nexigon_api::repositories::ResolvePackageVersionAssetByPathOutput;
-use crate::nexigon_api::repositories::ResolvePackageVersionByPathAction;
-use crate::nexigon_api::repositories::ResolvePackageVersionByPathOutput;
-use crate::tls;
+use super::api::devices::DeviceId;
+use super::api::devices::GetDevicePropertyAction;
+use super::api::devices::GetDevicePropertyOutput;
+use super::api::devices::SetDevicePropertyAction;
+use super::api::devices::SetDevicePropertyOutput;
+use super::api::properties::OtaUpdateBlocked;
+use super::api::properties::OtaUpdateBlockedCode;
+use super::api::properties::OtaUpdateCapability;
+use super::api::properties::OtaUpdateConfig;
+use super::api::properties::OtaUpdateFailureCode;
+use super::api::properties::OtaUpdateState;
+use super::api::properties::OtaUpdateStatus;
+use super::api::repositories::IssueAssetDownloadUrlAction;
+use super::api::repositories::IssueAssetDownloadUrlOutput;
+use super::api::repositories::PackageVersionId;
+use super::api::repositories::ResolvePackageVersionAssetByPathAction;
+use super::api::repositories::ResolvePackageVersionAssetByPathOutput;
+use super::api::repositories::ResolvePackageVersionByPathAction;
+use super::api::repositories::ResolvePackageVersionByPathOutput;
+use super::config;
+use super::download::Download;
+use super::firmware::Firmware;
+use super::hub;
+use super::hub::Session;
+use super::hub::WaitReadable;
+use super::tls;
 
 /// Property with the desired state.
 const CONFIG_PROPERTY: &str = "dev.nexigon.ota.config";
@@ -189,7 +189,7 @@ impl<S: Read + Write + WaitReadable> Check<'_, '_, S> {
                 .finish_failed(status, message("invalid version path"))
                 .await;
         };
-        let running_id = self.resolve(&path, config::FIRMWARE_VERSION).await?;
+        let running_id = self.resolve(&path, crate::FIRMWARE_VERSION).await?;
         status.current_version_id = running_id.clone();
 
         // Find out how an attempt in progress before the reset ended.
@@ -409,7 +409,7 @@ impl<S: Read + Write + WaitReadable> Check<'_, '_, S> {
     /// Issues a URL for downloading an asset.
     async fn download_url(&mut self, asset_id: &str) -> Result<Url, CheckError> {
         let action = IssueAssetDownloadUrlAction {
-            asset_id: crate::nexigon_api::repositories::RepositoryAssetId(Str::new(asset_id)),
+            asset_id: super::api::repositories::RepositoryAssetId(Str::new(asset_id)),
             filename: None,
         };
         let output = self
@@ -451,7 +451,7 @@ impl<S: Read + Write + WaitReadable> Check<'_, '_, S> {
             capabilities: Some(capabilities),
             config,
             config_version: status.config_version,
-            current_version: Some(Str::new(config::FIRMWARE_VERSION)),
+            current_version: Some(Str::new(crate::FIRMWARE_VERSION)),
             current_version_id: status.current_version_id.as_deref().map(version_id),
             state: Some(status.state),
             blocked,

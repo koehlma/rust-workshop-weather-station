@@ -10,7 +10,7 @@ use embassy_net::Stack;
 use embedded_io_async::Read;
 use embedded_io_async::Write;
 
-use crate::tls;
+use super::tls;
 
 /// Maximum size of the head of a response.
 const MAX_HEAD_SIZE: usize = 2048;

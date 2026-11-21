@@ -53,6 +53,16 @@ pub struct Reading {
     pub humidity_percent: f32,
 }
 
+impl fmt::Display for Reading {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{:.1} °C, {:.0} % humidity",
+            self.temperature_celsius, self.humidity_percent
+        )
+    }
+}
+
 /// DHT11 sensor connected to a GPIO pin.
 pub struct Dht11<'d> {
     pin: OutputOpenDrain<'d>,

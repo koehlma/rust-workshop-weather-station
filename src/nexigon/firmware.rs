@@ -1,11 +1,12 @@
-//! Firmware slots, updates, and the watchdog.
+//! Firmware slots and updates.
 //!
 //! The firmware runs from the active slot. An update is written to the DFU
 //! slot, checked against the release key, and marked for the bootloader, which
 //! swaps it in after a reset. The new firmware must commit itself, or the
 //! bootloader rolls it back after the next reset. The watchdog causes that
-//! reset if the firmware hangs or does not commit within
-//! [`COMMIT_DEADLINE`]. See `firmware.x` for the layout of the flash.
+//! reset if the firmware hangs or, through [`commit_deadline_task`], does not
+//! commit within [`COMMIT_DEADLINE`]. See `firmware.x` for the layout of the
+//! flash.
 
 use core::cell::RefCell;
 use core::fmt;
@@ -20,7 +21,6 @@ use embassy_rp::flash::Blocking;
 use embassy_rp::flash::ERASE_SIZE;
 use embassy_rp::flash::Flash;
 use embassy_rp::peripherals::FLASH;
-use embassy_rp::watchdog::Watchdog;
 use embassy_sync::blocking_mutex::Mutex;
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 use embassy_time::Duration;
@@ -33,16 +33,13 @@ use sha2::Sha256;
 use signature::hazmat::PrehashVerifier;
 use static_cell::StaticCell;
 
-use crate::config;
+use super::config;
 
 /// Size of the flash of the Raspberry Pi Pico W.
 const FLASH_SIZE: usize = 2 * 1024 * 1024;
 
-/// Time within which new firmware must commit itself.
+/// Time after the boot within which new firmware must commit itself.
 const COMMIT_DEADLINE: Duration = Duration::from_secs(5 * 60);
-
-/// Time after which the watchdog resets the device unless it is fed.
-const WATCHDOG_TIMEOUT: Duration = Duration::from_secs(8);
 
 type FlashDriver = Flash<'static, FLASH, Blocking, FLASH_SIZE>;
 type Partition =
@@ -193,24 +190,17 @@ pub fn reset() -> ! {
     cortex_m::peripheral::SCB::sys_reset()
 }
 
-/// Feeds the watchdog, which the bootloader has started, while the firmware
-/// makes progress.
+/// Rolls back firmware that the bootloader has just swapped in unless it
+/// commits itself within [`COMMIT_DEADLINE`].
 ///
-/// Firmware that the bootloader has just swapped in must commit itself within
-/// [`COMMIT_DEADLINE`]. Otherwise, the task stops feeding the watchdog, whose
-/// reset makes the bootloader roll back.
+/// The task stops feeding the watchdog, whose reset makes the bootloader roll
+/// back.
 #[embassy_executor::task]
-pub async fn watchdog_task(mut watchdog: Watchdog) -> ! {
-    watchdog.start(WATCHDOG_TIMEOUT);
-    let started = Instant::now();
-    loop {
-        if !COMMITTED.load(Ordering::Relaxed) && started.elapsed() > COMMIT_DEADLINE {
-            warn!("the firmware did not commit itself in time, rolling back");
-            loop {
-                Timer::after_secs(60).await;
-            }
-        }
-        watchdog.feed(WATCHDOG_TIMEOUT);
-        Timer::after_secs(1).await;
+pub async fn commit_deadline_task() {
+    // Instants count from the boot.
+    Timer::at(Instant::from_secs(0) + COMMIT_DEADLINE).await;
+    if !COMMITTED.load(Ordering::Relaxed) {
+        warn!("the firmware did not commit itself in time, rolling back");
+        crate::watchdog::stop_feeding();
     }
 }

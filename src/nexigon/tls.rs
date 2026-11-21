@@ -30,8 +30,8 @@ use p256::ecdsa::DerSignature;
 use p256::ecdsa::SigningKey;
 use signature::SignerMut;
 
-use crate::config;
-use crate::hub;
+use super::config;
+use super::hub;
 
 /// Cipher suite of connections, which every TLS 1.3 server supports.
 pub type CipherSuite = Aes128GcmSha256;

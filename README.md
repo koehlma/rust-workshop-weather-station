@@ -1,19 +1,28 @@
-# Nexigon on the Raspberry Pi Pico W
+# Weather Station on the Raspberry Pi Pico W
 
-Example firmware that keeps a Raspberry Pi Pico W (RP2040) connected to Nexigon Hub. Every 30 seconds, it publishes a heartbeat event and the temperature and humidity that a DHT11 sensor measures. It runs commands that Nexigon Hub sends and installs updates that Nexigon Hub rolls out. A bootloader swaps in updates and rolls back those that fail. It is written in Rust with [Embassy](https://embassy.dev) and runs without an operating system or an allocator.
+Firmware for a weather station built from a Raspberry Pi Pico W (RP2040) and a DHT11 sensor. Every 30 seconds, it reads the temperature and humidity. It is written in Rust with [Embassy](https://embassy.dev) and runs without an operating system or an allocator.
 
-The firmware holds one persistent connection to Nexigon Hub, which authenticates the device with a deployment token, a device fingerprint, and a client certificate. On its first connection, Nexigon Hub registers the device in the project of the deployment token.
+The `nexigon` feature, which is enabled by default, connects the weather station to Nexigon Hub. Every 30 seconds, the device publishes a heartbeat event and the reading of the sensor. It runs commands that Nexigon Hub sends and installs updates that Nexigon Hub rolls out. A bootloader swaps in updates and rolls back those that fail. Without the feature, the firmware logs the readings to the USB serial port.
+
+With the feature, the firmware holds one persistent connection to Nexigon Hub, which authenticates the device with a deployment token, a device fingerprint, and a client certificate. On its first connection, Nexigon Hub registers the device in the project of the deployment token.
 
 ## Requirements
 
-- A Raspberry Pi Pico W and a 2.4 GHz Wi-Fi network. The Wi-Fi chip of the Pico W does not support 5 GHz.
-- Optionally, a DHT11 sensor connected to GP0, for instance, the one on the Joy-IT explorer board (RB-P-XPLR). Turn on its switch on the board.
+- A Raspberry Pi Pico W.
+- A DHT11 sensor connected to GP0, for instance, the one on the Joy-IT explorer board (RB-P-XPLR). Turn on its switch on the board.
 - [Rust](https://rustup.rs). `rust-toolchain.toml` selects the toolchain and installs the `thumbv6m-none-eabi` target and `llvm-objcopy`.
-- `openssl`, which creates keys and signs releases, and `python3`, which creates the UF2 file.
+- `python3`, which creates the UF2 file.
 - Optionally, [`mise`](https://mise.jdx.dev) to run the tasks in `mise.toml`.
+
+For Nexigon, you also need:
+
+- A 2.4 GHz Wi-Fi network. The Wi-Fi chip of the Pico W does not support 5 GHz.
+- `openssl`, which creates keys and signs releases.
 - For releases, the [Nexigon CLI](https://docs.nexigon.dev) and an organization API token.
 
-## Build and Flash the Firmware
+## Configure Nexigon
+
+Skip this section to build the firmware without Nexigon.
 
 Create the identity of the device:
 
@@ -47,17 +56,33 @@ NEXIGON_ORG_TOKEN = "org_sk_..."
 
 Without `mise`, set these environment variables before running the scripts in `scripts/`. The firmware embeds the configuration, the identity, and the public release key when it is built.
 
-Build the bootloader and the firmware:
+## Build and Flash the Firmware
+
+Build the bootloader and the firmware with Nexigon:
 
 ```sh
 mise run build
 ```
 
+Or build them without Nexigon, which needs no configuration:
+
+```sh
+mise run build -- --no-default-features
+```
+
 The version of the firmware is the time of the build, for instance, `20261120-163751`. Set `FIRMWARE_VERSION` to choose another one.
 
-To flash the bootloader and the firmware, hold the BOOTSEL button while connecting the Pico W over USB. It appears as a drive named `RPI-RP2`. Copy `target/nexigon-mcu-rp-example.uf2` to the drive. The Pico W restarts with the new firmware. Afterward, the device receives new versions through Nexigon Hub.
+To flash the bootloader and the firmware, hold the BOOTSEL button while connecting the Pico W over USB. It appears as a drive named `RPI-RP2`. Copy `target/nexigon-mcu-rp-example.uf2` to the drive. The Pico W restarts with the new firmware. With Nexigon, the device afterward receives new versions through Nexigon Hub.
 
-The firmware logs to a USB serial port, for instance, `/dev/ttyACM0` on Linux or `/dev/cu.usbmodem*` on macOS. Open it with a serial terminal, for instance, `tio /dev/ttyACM0`. The log of a working device looks as follows:
+The firmware logs to a USB serial port, for instance, `/dev/ttyACM0` on Linux or `/dev/cu.usbmodem*` on macOS. Open it with a serial terminal, for instance, `tio /dev/ttyACM0`. Without Nexigon, the log looks as follows:
+
+```text
+starting firmware 20261120-163751
+measured 21.0 °C, 45 % humidity
+measured 21.1 °C, 45 % humidity
+```
+
+With Nexigon, it looks as follows:
 
 ```text
 starting firmware 20261120-163751
@@ -76,18 +101,18 @@ The events appear in the event log of the device in Nexigon Hub.
 
 ## Events
 
-Every 30 seconds, the device publishes two events:
+With Nexigon, the device publishes two events every 30 seconds:
 
 | Category      | Body                                                          |
 | ------------- | ------------------------------------------------------------- |
 | `heartbeat`   | `{"uptimeSeconds": 42, "firmwareVersion": "20261120-163751"}` |
 | `environment` | `{"temperatureCelsius": 21.0, "humidityPercent": 45.0}`       |
 
-The `environment` event carries the reading of the DHT11 sensor. If the sensor does not answer, for instance, because none is connected, the device logs a warning and publishes only the heartbeat. `src/dht11.rs` reads the sensor.
+The `environment` event carries the reading of the DHT11 sensor. If the sensor does not answer, for instance, because none is connected, the device logs a warning and publishes only the heartbeat. `src/dht11.rs` reads the sensor, and `src/nexigon/events.rs` publishes the events.
 
 ## Commands
 
-The device offers three commands, which Nexigon Hub lists on the page of the device:
+With Nexigon, the device offers three commands, which Nexigon Hub lists on the page of the device:
 
 | Command             | Input          | Output                               |
 | ------------------- | -------------- | ------------------------------------ |
@@ -97,7 +122,7 @@ The device offers three commands, which Nexigon Hub lists on the page of the dev
 
 `set-led` turns the LED of the Pico W on or off. `get-status` reports how long the device has been running and whether the LED is on. `nexigon.ota.check` checks for an update right away.
 
-To add a command, describe it in `publish_manifest` and handle it in `execute`, both in `src/commands.rs`. The device runs one command at a time, between its other work, so a command must finish quickly. Nexigon Hub stops waiting for a pong after 15 seconds.
+To add a command, describe it in `publish_manifest` and handle it in `execute`, both in `src/nexigon/commands.rs`. The device runs one command at a time, between its other work, so a command must finish quickly. Nexigon Hub stops waiting for a pong after 15 seconds.
 
 ## Release an Update
 
@@ -127,6 +152,19 @@ update completed
 
 ## How It Works
 
+The core of the firmware reads the sensor and keeps the device running. Everything that concerns Nexigon is in `src/nexigon/`, which only the `nexigon` feature compiles, together with its dependencies. Its entry point is `nexigon::run`, which takes the peripherals it needs and the sensor. Without the feature, `src/standalone.rs` logs the readings instead. Both variants use the same bootloader and flash layout, so a device can switch between them when flashed over USB.
+
+| File                | Purpose                                                    |
+| ------------------- | ---------------------------------------------------------- |
+| `src/main.rs`       | Start of the firmware, which hands the sensor to a variant |
+| `src/dht11.rs`      | Readings of the DHT11 sensor                               |
+| `src/watchdog.rs`   | Watchdog, which resets the device when it hangs            |
+| `src/standalone.rs` | Logging of readings without Nexigon                        |
+| `src/nexigon/`      | Connection to Nexigon Hub, with the `nexigon` feature      |
+| `bootloader/`       | Bootloader that swaps in updates and rolls them back       |
+
+### Connection to Nexigon Hub
+
 After joining the Wi-Fi network, the firmware synchronizes its clock with SNTP. Events carry the time they were emitted.
 
 The firmware then opens a TLS 1.3 connection to Nexigon Hub with [`embedded-tls`](https://github.com/drogue-iot/embedded-tls) and authenticates with its own certificate. The handshake is the most expensive step on the RP2040, which has no hardware acceleration for cryptography. The connection therefore stays open and is only reopened after a failure.
@@ -152,25 +190,27 @@ The flash holds the bootloader, the state of the bootloader, and two slots for t
 
 The firmware follows the OTA update contract of Nexigon Hub, which Nexigon Agent also implements. A check reads the desired state from the `dev.nexigon.ota.config` property. It resolves the version path of the configuration and the version of the running firmware, the tag `FIRMWARE_VERSION`, in the same package. If they differ, the firmware downloads the asset and its signature from the object storage of Nexigon Hub over a second TLS connection. It writes the asset to the DFU slot, verifies its signature with the release key, marks it for the bootloader, and resets. The bootloader swaps the slots and starts the new firmware, which commits itself once it reaches Nexigon Hub. If the new firmware does not commit itself within 5 minutes, the watchdog resets the device, and the bootloader swaps the old firmware back. A power failure during a swap resumes it. The firmware reports each step in the `dev.nexigon.ota.status` property.
 
-The types of the actions, command invocations, properties, and results in `src/generated/nexigon_api.rs` are generated from the API definitions of Nexigon Hub with Sidex's `rust-embedded` backend. They read messages without copying them and borrow from the receive buffers.
+The types of the actions, command invocations, properties, and results in `src/nexigon/generated/nexigon_api.rs` are generated from the API definitions of Nexigon Hub with Sidex's `rust-embedded` backend. They read messages without copying them and borrow from the receive buffers.
 
-| File               | Purpose                                                  |
-| ------------------ | -------------------------------------------------------- |
-| `src/main.rs`      | Wi-Fi, networking, events, and the main loop             |
-| `src/commands.rs`  | Commands of the device                                   |
-| `src/dht11.rs`     | Readings of the DHT11 sensor                             |
-| `src/ota.rs`       | Update checks following the OTA update contract          |
-| `src/firmware.rs`  | Firmware slots, signature verification, and the watchdog |
-| `src/download.rs`  | Downloads over HTTPS                                     |
-| `src/hub.rs`       | Session with Nexigon Hub: actions, commands, and pings   |
-| `src/multiplex.rs` | Frames of the multiplex protocol                         |
-| `src/websocket.rs` | WebSocket client                                         |
-| `src/tls.rs`       | TLS connections and client authentication                |
-| `src/clock.rs`     | Clock synchronization with SNTP                          |
-| `src/config.rs`    | Configuration, identity, and release key                 |
-| `bootloader/`      | Bootloader that swaps in updates and rolls them back     |
+| File in `src/nexigon/` | Purpose                                                     |
+| ---------------------- | ----------------------------------------------------------- |
+| `mod.rs`               | Entry point and the session with Nexigon Hub                |
+| `network.rs`           | Wi-Fi and the network stack                                 |
+| `events.rs`            | Heartbeat and environment events                            |
+| `commands.rs`          | Commands of the device                                      |
+| `ota.rs`               | Update checks following the OTA update contract             |
+| `firmware.rs`          | Firmware slots, signature verification, and commit deadline |
+| `download.rs`          | Downloads over HTTPS                                        |
+| `hub.rs`               | Session with Nexigon Hub: actions, commands, and pings      |
+| `multiplex.rs`         | Frames of the multiplex protocol                            |
+| `websocket.rs`         | WebSocket client                                            |
+| `tls.rs`               | TLS connections and client authentication                   |
+| `clock.rs`             | Clock synchronization with SNTP                             |
+| `config.rs`            | Configuration, identity, and release key                    |
 
 ## Limitations
+
+The following limitations concern the connection to Nexigon Hub.
 
 - The private key of the device is stored in flash, from which anyone with physical access can read it. The RP2040 has no secure key storage.
 - The RP2040 has no true random number generator. The firmware uses its ring oscillator, the best source of entropy available.

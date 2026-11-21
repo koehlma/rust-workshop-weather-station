@@ -1,4 +1,5 @@
-//! Configuration and identity of the device, embedded at compile time.
+//! Configuration and identity with which the device reaches Nexigon Hub,
+//! embedded at compile time.
 
 /// Host name of Nexigon Hub, derived from `NEXIGON_HUB_URL`.
 pub const HUB_HOST: &str = env!("NEXIGON_HUB_HOST");
@@ -14,20 +15,13 @@ pub const WIFI_SSID: &str = env!("WIFI_SSID");
 pub const WIFI_PASSWORD: &str = env!("WIFI_PASSWORD");
 
 /// Fingerprint identifying the device in its project.
-pub const FINGERPRINT: &str = include_str!("../identity/fingerprint.txt");
+pub const FINGERPRINT: &str = include_str!("../../identity/fingerprint.txt");
 
 /// Self-signed certificate of the device in DER format.
-pub const DEVICE_CERT: &[u8] = include_bytes!("../identity/device-cert.der");
+pub const DEVICE_CERT: &[u8] = include_bytes!("../../identity/device-cert.der");
 
 /// Private key of the device certificate in SEC1 DER format.
-pub const DEVICE_KEY: &[u8] = include_bytes!("../identity/device-key.der");
-
-/// Version of the firmware, by default the time of the build, for instance,
-/// `20261120-163000`.
-///
-/// Releases tag their package version with it, so that the device finds the
-/// version it runs.
-pub const FIRMWARE_VERSION: &str = env!("FIRMWARE_VERSION");
+pub const DEVICE_KEY: &[u8] = include_bytes!("../../identity/device-key.der");
 
 /// Version path from which the device installs updates unless the
 /// `dev.nexigon.ota.config` property names another, from the optional
@@ -35,4 +29,4 @@ pub const FIRMWARE_VERSION: &str = env!("FIRMWARE_VERSION");
 pub const UPDATE_PATH: Option<&str> = option_env!("NEXIGON_UPDATE_PATH");
 
 /// Public key with which releases are signed, an uncompressed P-256 point.
-pub const RELEASE_KEY: &[u8] = include_bytes!("../keys/release-key.pub");
+pub const RELEASE_KEY: &[u8] = include_bytes!("../../keys/release-key.pub");

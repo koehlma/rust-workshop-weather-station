@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Regenerates `src/generated/nexigon_api.rs` from the API definitions of
+# Regenerates `src/nexigon/generated/nexigon_api.rs` from the API definitions of
 # Nexigon Hub with Sidex's `rust-embedded` backend. Pass the path of a checkout
 # of the `nexigon` repository.
 
@@ -18,5 +18,5 @@ cd "$1/crates/libs/nexigon-api"
 sidex generate rust-embedded "$output" \
     --config-override 'groups=["device"]' \
     --config-override 'derive=["Debug"]'
-cp "$output/mod.rs" "$root/src/generated/nexigon_api.rs"
-rustfmt --edition 2024 "$root/src/generated/nexigon_api.rs"
+cp "$output/mod.rs" "$root/src/nexigon/generated/nexigon_api.rs"
+rustfmt --edition 2024 "$root/src/nexigon/generated/nexigon_api.rs"

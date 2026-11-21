@@ -17,17 +17,17 @@ use sidex_embedded::types::Json;
 use sidex_embedded::types::Seq;
 use sidex_embedded::types::Str;
 
-use crate::hub;
-use crate::hub::Session;
-use crate::hub::WaitReadable;
-use crate::nexigon_api::devices::DeviceCommandDoneData;
-use crate::nexigon_api::devices::DeviceCommandInvokeData;
-use crate::nexigon_api::devices::DeviceCommandStatus;
-use crate::nexigon_api::devices::DeviceId;
-use crate::nexigon_api::devices::SetDevicePropertyAction;
-use crate::nexigon_api::devices::SetDevicePropertyOutput;
-use crate::nexigon_api::properties::DeviceCommandDescriptor;
-use crate::nexigon_api::properties::DeviceCommandManifest;
+use super::api::devices::DeviceCommandDoneData;
+use super::api::devices::DeviceCommandInvokeData;
+use super::api::devices::DeviceCommandStatus;
+use super::api::devices::DeviceId;
+use super::api::devices::SetDevicePropertyAction;
+use super::api::devices::SetDevicePropertyOutput;
+use super::api::properties::DeviceCommandDescriptor;
+use super::api::properties::DeviceCommandManifest;
+use super::hub;
+use super::hub::Session;
+use super::hub::WaitReadable;
 
 /// JSON Schema of the input of `set-led`.
 const SET_LED_INPUT: &str = r#"{

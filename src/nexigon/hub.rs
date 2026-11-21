@@ -26,19 +26,19 @@ use sidex_embedded::Encode;
 use sidex_embedded::EncodeError;
 use sidex_embedded::json;
 
-use crate::config;
-use crate::multiplex;
-use crate::multiplex::DATA_HEADER_SIZE;
-use crate::multiplex::Frame;
-use crate::nexigon_api::devices::DeviceCommandDeviceFrame;
-use crate::nexigon_api::devices::DeviceCommandDoneData;
-use crate::nexigon_api::devices::DeviceCommandHubFrame;
-use crate::nexigon_api::devices::DeviceCommandInvokeData;
-use crate::nexigon_api::errors::ActionErrorKind;
-use crate::nexigon_api::errors::ActionResult;
-use crate::websocket;
-use crate::websocket::MAX_SMALL_MESSAGE_SIZE;
-use crate::websocket::WebSocket;
+use super::api::devices::DeviceCommandDeviceFrame;
+use super::api::devices::DeviceCommandDoneData;
+use super::api::devices::DeviceCommandHubFrame;
+use super::api::devices::DeviceCommandInvokeData;
+use super::api::errors::ActionErrorKind;
+use super::api::errors::ActionResult;
+use super::config;
+use super::multiplex;
+use super::multiplex::DATA_HEADER_SIZE;
+use super::multiplex::Frame;
+use super::websocket;
+use super::websocket::MAX_SMALL_MESSAGE_SIZE;
+use super::websocket::WebSocket;
 
 /// Duration without receiving a frame after which the session fails.
 const READ_TIMEOUT: Duration = Duration::from_secs(30);

@@ -1,16 +1,17 @@
-//! Passes the memory layout to the linker and checks the device configuration.
+//! Passes the memory layout to the linker and checks the configuration.
 //!
-//! The firmware reads its configuration from environment variables, the device
-//! identity from `identity/`, and the release key from `keys/` at compile
-//! time, so all of them must be present.
+//! The firmware embeds its version at compile time. With the `nexigon`
+//! feature, it also embeds its configuration from environment variables, the
+//! device identity from `identity/`, and the release key from `keys/`, so all
+//! of them must be present.
 
 use std::env;
 use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
 
-/// Environment variables that configure the firmware.
-const VARIABLES: &[&str] = &[
+/// Environment variables that configure the connection to Nexigon Hub.
+const NEXIGON_VARIABLES: &[&str] = &[
     "NEXIGON_HUB_URL",
     "NEXIGON_DEPLOYMENT_TOKEN",
     "WIFI_SSID",
@@ -30,7 +31,29 @@ fn main() {
     println!("cargo:rustc-link-arg-bins=-Tlink.x");
     println!("cargo:rustc-link-arg-bins=-Tlink-rp.x");
 
-    for variable in VARIABLES {
+    if env::var_os("CARGO_FEATURE_NEXIGON").is_some() {
+        check_nexigon_config();
+    }
+
+    // Releases tag their package version with the firmware version, so it must
+    // be a valid tag.
+    println!("cargo:rerun-if-env-changed=FIRMWARE_VERSION");
+    let version = env::var("FIRMWARE_VERSION").unwrap_or_else(|_| "dev".to_owned());
+    let valid = version.len() <= 128
+        && version.starts_with(|c: char| c.is_ascii_alphanumeric())
+        && version
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || "._+~-".contains(c));
+    if !valid {
+        panic!("`FIRMWARE_VERSION` must be a valid tag of a package version");
+    }
+    println!("cargo:rustc-env=FIRMWARE_VERSION={version}");
+}
+
+/// Checks the configuration, identity, and release key of the `nexigon`
+/// feature and derives the host name of Nexigon Hub.
+fn check_nexigon_config() {
+    for variable in NEXIGON_VARIABLES {
         println!("cargo:rerun-if-env-changed={variable}");
         if env::var(variable).is_err() {
             panic!("environment variable `{variable}` is not set; see README.md");
@@ -60,18 +83,4 @@ fn main() {
     }
 
     println!("cargo:rerun-if-env-changed=NEXIGON_UPDATE_PATH");
-
-    // Releases tag their package version with the firmware version, so it must
-    // be a valid tag.
-    println!("cargo:rerun-if-env-changed=FIRMWARE_VERSION");
-    let version = env::var("FIRMWARE_VERSION").unwrap_or_else(|_| "dev".to_owned());
-    let valid = version.len() <= 128
-        && version.starts_with(|c: char| c.is_ascii_alphanumeric())
-        && version
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || "._+~-".contains(c));
-    if !valid {
-        panic!("`FIRMWARE_VERSION` must be a valid tag of a package version");
-    }
-    println!("cargo:rustc-env=FIRMWARE_VERSION={version}");
 }
