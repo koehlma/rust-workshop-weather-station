@@ -63,6 +63,7 @@ pub use self::clock::now;
 pub use self::clock::unix_seconds;
 pub use self::config::Config;
 use self::firmware::Firmware;
+pub use self::network::APPLICATION_SOCKETS;
 pub use self::network::WifiPeripherals;
 
 /// Interval between heartbeats.
@@ -99,6 +100,10 @@ pub trait Application {
 
     /// Starts the parts of the application that use the network, once the
     /// device has joined it.
+    ///
+    /// The application may use up to [`APPLICATION_SOCKETS`] sockets of
+    /// `stack` at a time. The stack panics when more sockets are open than it
+    /// has room for.
     fn start(&mut self, _spawner: Spawner, _stack: Stack<'static>) {}
 
     /// Applies the value of [`CONFIG_PROPERTY`](Self::CONFIG_PROPERTY), which

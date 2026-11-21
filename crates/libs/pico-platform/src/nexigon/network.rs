@@ -40,6 +40,14 @@ const RETRY_DELAY: Duration = Duration::from_secs(10);
 /// Time within which DHCP must provide an address after joining the network.
 const DHCP_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// Number of sockets that the application may use at a time.
+pub const APPLICATION_SOCKETS: usize = 2;
+
+/// Number of sockets of the network stack: DHCP and DNS, which the stack
+/// keeps open, the connection to Nexigon Hub, the connection of a download,
+/// SNTP, and the sockets of the application.
+const SOCKETS: usize = 5 + APPLICATION_SOCKETS;
+
 bind_interrupts!(struct Irqs {
     PIO0_IRQ_0 => pio::InterruptHandler<PIO0>;
     DMA_IRQ_0 => dma::InterruptHandler<DMA_CH0>;
@@ -109,7 +117,7 @@ pub async fn start(
         .set_power_management(cyw43::PowerManagementMode::PowerSave)
         .await;
 
-    static NET_RESOURCES: StaticCell<StackResources<4>> = StaticCell::new();
+    static NET_RESOURCES: StaticCell<StackResources<SOCKETS>> = StaticCell::new();
     let (stack, runner) = embassy_net::new(
         net_device,
         embassy_net::Config::dhcpv4(Default::default()),
