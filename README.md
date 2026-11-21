@@ -169,9 +169,9 @@ Only Nexigon Hub can change a protected property, not the device itself. Without
 
 ### Screen
 
-The touch display shows the latest value of one quantity, the latest values of the others, and a plot of the stored measurements of the quantity. The plot changes between temperature, humidity, UV index, and air pressure every 10 seconds. It covers the last 24 hours. A tap anywhere on the screen changes the interval to 7 days, 30 days, 6 hours, and back to 24 hours. The interval appears in the top right corner.
+The touch display shows the latest value of one quantity, the latest values of the others, and a plot of the stored measurements of the quantity. The plot changes between temperature, humidity, UV index, and air pressure every 10 seconds. It covers the last 24 hours. A tap anywhere on the screen changes the interval to 7 days, 30 days, 1 hour, 3 hours, 6 hours, and back to 24 hours. The interval appears in the top right corner.
 
-Each of the 288 columns of the plot summarizes the measurements of a bucket of the interval, for instance, 5 minutes of the last 24 hours. A dark band spans from their minimum to their maximum, and a bright line connects their means. Buckets without measurements stay empty. The vertical axis fits the measurements of the interval.
+Each of the 288 columns of the plot summarizes the measurements of a bucket of the interval, for instance, 5 minutes of the last 24 hours. A dark band spans from their minimum to their maximum, and a bright line connects their means. Gaps of up to 2 minutes are interpolated, so that the plots of 1 and 3 hours stay continuous although their columns are shorter than the 30 seconds between two measurements. Longer gaps stay empty. The vertical axis fits the measurements of the interval.
 
 The touch display keeps the summaries of the interval in memory and adds every new measurement to them. When the interval changes, and after a restart once the clock is synchronized, it reads the measurements of the interval from the card. While it reads, the screen shows "Reading the SD card".
 

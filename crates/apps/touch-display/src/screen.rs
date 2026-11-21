@@ -5,7 +5,8 @@
 //! metrics, a plot of the interval, and the state of the storage with the
 //! version of the firmware. Each column of the plot is a bucket of the
 //! [`History`](crate::history::History): a band from its minimum to its
-//! maximum and a line through its mean.
+//! maximum and a line through its mean. Gaps of up to
+//! [`Interval::max_bridged_columns`] empty columns are interpolated.
 
 use core::fmt::Write as _;
 
@@ -198,10 +199,14 @@ fn draw_plot<D: DrawTarget<Color = Rgb565>>(
         target.fill_solid(&axis, AXIS)?;
     }
     let range = range(screen.metric, screen.columns);
-    for (offset, column) in screen.columns.iter().enumerate() {
+    let columns = bridge(screen.columns, screen.interval.max_bridged_columns());
+    // Mean of the previous column, to which the line connects.
+    let mut previous = None;
+    for (offset, column) in columns.iter().enumerate() {
         let x = PLOT_LEFT + offset as i32;
         clear(target, x, PLOT_TOP, 1, PLOT_HEIGHT)?;
         let (Some(column), Some((low, high))) = (column, range) else {
+            previous = None;
             continue;
         };
         let y = |value: f32| {
@@ -215,7 +220,15 @@ fn draw_plot<D: DrawTarget<Color = Rgb565>>(
             BAND,
         )?;
         let mean = y(column.mean).min(PLOT_BOTTOM - 1);
-        target.fill_solid(&Rectangle::new(Point::new(x, mean), Size::new(1, 2)), LINE)?;
+        let (start, end) = match previous {
+            Some(previous) => (mean.min(previous), mean.max(previous).max(mean + 1)),
+            None => (mean, mean + 1),
+        };
+        target.fill_solid(
+            &Rectangle::new(Point::new(x, start), Size::new(1, (end - start + 1) as u32)),
+            LINE,
+        )?;
+        previous = Some(mean);
     }
     let Some((low, high)) = range else {
         let center = Point::new(PLOT_LEFT + BUCKETS as i32 / 2, PLOT_TOP + PLOT_HEIGHT / 2);
@@ -246,6 +259,34 @@ fn draw_plot<D: DrawTarget<Color = Rgb565>>(
         )?;
     }
     Ok(())
+}
+
+/// Returns `columns` with gaps of up to `max_gap` empty columns between two
+/// columns filled by linear interpolation.
+fn bridge(columns: &[Option<Column>; BUCKETS], max_gap: usize) -> [Option<Column>; BUCKETS] {
+    let mut bridged = *columns;
+    let mut previous: Option<(usize, Column)> = None;
+    for (index, column) in columns.iter().enumerate() {
+        let Some(column) = *column else {
+            continue;
+        };
+        if let Some((start, from)) = previous {
+            let gap = index - start - 1;
+            if gap <= max_gap {
+                for step in 1..=gap {
+                    let t = step as f32 / (gap + 1) as f32;
+                    let lerp = |from: f32, to: f32| from + (to - from) * t;
+                    bridged[start + step] = Some(Column {
+                        min: lerp(from.min, column.min),
+                        max: lerp(from.max, column.max),
+                        mean: lerp(from.mean, column.mean),
+                    });
+                }
+            }
+        }
+        previous = Some((index, column));
+    }
+    bridged
 }
 
 /// Returns the range of the vertical axis for `columns`, or `None` if they

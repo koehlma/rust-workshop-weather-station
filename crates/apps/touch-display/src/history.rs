@@ -9,9 +9,14 @@ use crate::format::Record;
 /// Number of buckets, one for each column of the plot.
 pub const BUCKETS: usize = 288;
 
+/// Longest time without measurements that the plot bridges.
+const MAX_BRIDGED_SECONDS: u32 = 2 * 60;
+
 /// Interval that the plot shows, up to the current time.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Interval {
+    Hour,
+    ThreeHours,
     SixHours,
     Day,
     Week,
@@ -22,10 +27,12 @@ impl Interval {
     /// Returns the interval that follows this one when the screen is touched.
     pub fn next(self) -> Self {
         match self {
+            Self::Hour => Self::ThreeHours,
+            Self::ThreeHours => Self::SixHours,
             Self::SixHours => Self::Day,
             Self::Day => Self::Week,
             Self::Week => Self::Month,
-            Self::Month => Self::SixHours,
+            Self::Month => Self::Hour,
         }
     }
 
@@ -33,6 +40,8 @@ impl Interval {
     pub fn seconds(self) -> u32 {
         const HOUR: u32 = 3_600;
         match self {
+            Self::Hour => HOUR,
+            Self::ThreeHours => 3 * HOUR,
             Self::SixHours => 6 * HOUR,
             Self::Day => 24 * HOUR,
             Self::Week => 7 * 24 * HOUR,
@@ -40,14 +49,27 @@ impl Interval {
         }
     }
 
-    /// Returns the length of a bucket in seconds.
-    fn bucket_seconds(self) -> u32 {
-        self.seconds() / BUCKETS as u32
+    /// Returns the number of the bucket of `time` in Unix seconds. Buckets
+    /// may be fractions of seconds long, for instance, 12.5 seconds for an
+    /// hour.
+    fn bucket(self, time: u32) -> u32 {
+        (u64::from(time) * BUCKETS as u64 / u64::from(self.seconds())) as u32
+    }
+
+    /// Returns the largest number of empty columns between two measurements
+    /// that the plot bridges, which span at most [`MAX_BRIDGED_SECONDS`].
+    ///
+    /// Columns of short intervals are shorter than the time between two
+    /// measurements, so that every second column or so is empty.
+    pub fn max_bridged_columns(self) -> usize {
+        (u64::from(MAX_BRIDGED_SECONDS) * BUCKETS as u64 / u64::from(self.seconds())) as usize
     }
 
     /// Returns the name of the interval.
     pub fn label(self) -> &'static str {
         match self {
+            Self::Hour => "1 h",
+            Self::ThreeHours => "3 h",
             Self::SixHours => "6 h",
             Self::Day => "24 h",
             Self::Week => "7 d",
@@ -58,6 +80,8 @@ impl Interval {
     /// Returns the labels of the start and the middle of the interval.
     pub fn labels(self) -> [&'static str; 2] {
         match self {
+            Self::Hour => ["-1 h", "-30 min"],
+            Self::ThreeHours => ["-3 h", "-1.5 h"],
             Self::SixHours => ["-6 h", "-3 h"],
             Self::Day => ["-24 h", "-12 h"],
             Self::Week => ["-7 d", "-3.5 d"],
@@ -214,7 +238,7 @@ impl History {
     /// Adds `record`, unless its bucket has already been replaced by a newer
     /// one.
     pub fn add(&mut self, record: &Record) {
-        let bucket = record.time / self.interval.bucket_seconds();
+        let bucket = self.interval.bucket(record.time);
         let slot = &mut self.slots[bucket as usize % BUCKETS];
         if slot.bucket != bucket {
             if slot.bucket != u32::MAX && slot.bucket > bucket {
@@ -237,7 +261,7 @@ impl History {
     /// seconds, oldest first.
     pub fn columns(&self, metric: Metric, now: u32) -> [Option<Column>; BUCKETS] {
         let index = Metric::ALL.iter().position(|m| *m == metric).unwrap();
-        let last = now / self.interval.bucket_seconds();
+        let last = self.interval.bucket(now);
         core::array::from_fn(|offset| {
             let bucket = (last + 1).checked_sub((BUCKETS - offset) as u32)?;
             let slot = &self.slots[bucket as usize % BUCKETS];
