@@ -145,7 +145,7 @@ If a sensor fails, the device logs a warning and leaves out its fields. If all f
 
 ## Touch Display
 
-The touch display shows "Hello from Nexigon!" and the version of its firmware. It publishes only the heartbeat. Its display runs in landscape, as in the example code of Waveshare. The firmware keeps the touch controller and the microSD slot deselected and does not use them yet.
+The touch display shows "Updated through Nexigon!" and the version of its firmware. It publishes only the heartbeat. Its display runs in landscape, as in the example code of Waveshare. The firmware keeps the touch controller and the microSD slot deselected and does not use them yet.
 
 | Signal                   | GPIO |
 | ------------------------ | ---- |

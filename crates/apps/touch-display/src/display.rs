@@ -118,7 +118,7 @@ impl Display {
     /// Draws a placeholder text with the version of the firmware.
     pub fn show_placeholder(&mut self, firmware_version: &str) {
         let title = MonoTextStyle::new(&FONT_10X20, Rgb565::WHITE);
-        Text::with_alignment("Hello from Nexigon!", CENTER, title, Alignment::Center)
+        Text::with_alignment("Updated through Nexigon!", CENTER, title, Alignment::Center)
             .draw(&mut self.display)
             .expect("the SPI bus and the pins of the display do not fail");
         let caption = MonoTextStyle::new(&FONT_6X10, Rgb565::CYAN);
