@@ -1,0 +1,48 @@
+[package]
+name = "nexigon-mcu-rp-example"
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[workspace]
+members = ["bootloader"]
+
+[dependencies]
+cortex-m = "0.7"
+cortex-m-rt = "0.7"
+cyw43 = "0.7"
+cyw43-pio = "0.10"
+embassy-boot = "0.7"
+embassy-boot-rp = "0.10"
+embassy-embedded-hal = "0.6"
+embassy-futures = "0.1"
+embassy-executor = { version = "0.10", features = ["platform-cortex-m", "executor-thread"] }
+embassy-net = { version = "0.9", features = ["tcp", "udp", "dns", "dhcpv4", "proto-ipv4"] }
+embassy-rp = { version = "0.10", features = ["rp2040", "critical-section-impl", "time-driver"] }
+embassy-sync = "0.8"
+embassy-time = "0.5"
+embassy-usb-logger = "0.6"
+embedded-io-async = "0.7"
+heapless = "0.8"
+embedded-tls = { version = "0.19", default-features = false, features = ["log"] }
+log = "0.4"
+p256 = { version = "0.13", default-features = false, features = ["ecdsa", "pkcs8"] }
+panic-reset = "0.1"
+# Only enables a feature: The RP2040 lacks atomic compare-and-swap instructions, which
+# `static_cell` needs, so atomics use critical sections instead.
+portable-atomic = { version = "1", features = ["critical-section"] }
+sha2 = { version = "0.10", default-features = false }
+signature = { version = "2", default-features = false }
+sidex-embedded = { git = "https://github.com/silitics/sidex", branch = "work/agents/rust-embedded" }
+static_cell = "2"
+
+[profile.release]
+debug = 2
+lto = true
+opt-level = "s"
+
+# Unknown TLS groups and signature schemes, which OpenSSL 3.5 offers, abort
+# handshakes with `embedded-tls` 0.19.0. See `vendor/README.md`.
+[patch.crates-io]
+embedded-tls = { path = "vendor/embedded-tls" }

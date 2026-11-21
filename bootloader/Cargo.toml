@@ -1,0 +1,15 @@
+[package]
+name = "bootloader"
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[dependencies]
+cortex-m = "0.7"
+cortex-m-rt = "0.7"
+embassy-boot-rp = "0.10"
+embassy-rp = { version = "0.10", features = ["rp2040", "critical-section-impl"] }
+embassy-sync = "0.8"
+embassy-time = "0.5"
+panic-reset = "0.1"

@@ -1,0 +1,19 @@
+[tasks.provision]
+description = "Create the identity of a new device in `identity/`."
+run = "scripts/provision.sh"
+
+[tasks."create-release-key"]
+description = "Create the key pair with which releases are signed in `keys/`."
+run = "scripts/create-release-key.sh"
+
+[tasks.build]
+description = "Build the bootloader and the firmware into `target/`."
+run = "scripts/build.sh"
+
+[tasks.release]
+description = "Publish the firmware built last as a version of a package, for instance, `mise run release default/rp-test`."
+run = "scripts/release.sh"
+
+[tasks."generate:api"]
+description = "Regenerate the types of the device API from a checkout of the `nexigon` repository."
+run = "scripts/generate-api.sh"

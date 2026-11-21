@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+# Publishes the firmware built by `scripts/build.sh` as a new version of a
+# package in Nexigon Hub. The version gets the assets `firmware.bin` and
+# `firmware.bin.sig`, the locked tag of the firmware version, and the tag
+# `latest`, which moves to it.
+#
+# Usage: release.sh REPOSITORY/PACKAGE
+#
+# Requires `nexigon-cli` (or `NEXIGON_CLI`) and an organization API token in
+# `NEXIGON_ORG_TOKEN`.
+
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+
+if [ $# -ne 1 ] || [[ "$1" != */* ]]; then
+    echo "usage: $0 REPOSITORY/PACKAGE" >&2
+    exit 1
+fi
+package="$1"
+repository="${package%%/*}"
+version="$(cat target/firmware.version)"
+cli="${NEXIGON_CLI:-nexigon-cli}"
+
+config="$(mktemp)"
+trap 'rm -f "$config"' EXIT
+chmod 600 "$config"
+printf 'hub-url = "%s"\ntoken = "%s"\n' "$NEXIGON_HUB_URL" "$NEXIGON_ORG_TOKEN" >"$config"
+
+nexigon() {
+    "$cli" --config "$config" "$@"
+}
+
+# Prints a field of the JSON object on standard input.
+field() {
+    python3 -c 'import json, sys; print(json.load(sys.stdin)[sys.argv[1]])' "$1"
+}
+
+image="$(nexigon repositories assets upload "$repository" target/firmware.bin | field assetId)"
+signature="$(nexigon repositories assets upload "$repository" target/firmware.bin.sig | field assetId)"
+version_id="$(
+    nexigon repositories versions create "$package" \
+        --tag "$version,locked" \
+        --metadata "{\"imageVersion\": \"$version\"}" |
+        field versionId
+)"
+nexigon repositories versions assets add "$version_id" "$image" firmware.bin >/dev/null
+nexigon repositories versions assets add "$version_id" "$signature" firmware.bin.sig >/dev/null
+nexigon repositories versions tag "$version_id" --tag latest,reassign >/dev/null
+
+echo "Released firmware $version as $package/$version ($version_id), tagged latest."
